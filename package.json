@@ -1,6 +1,7 @@
 {
   "name": "iac-aws",
   "private": true,
+  "license": "MIT",
   "type": "commonjs",
   "main": "src/index.ts",
   "scripts": {
