@@ -28,7 +28,8 @@ beforeAll(() => {
         }
         return { id, state };
       },
-      call: (args) => args.inputs,
+      call: (args) =>
+        args.token === "aws:index/getCallerIdentity:getCallerIdentity" ? { accountId: "000000000000" } : args.inputs,
     },
     "iac-aws",
     "test",
@@ -51,7 +52,7 @@ async function build() {
   const spec = loadSpec(path.join(__dirname, "..", "org.example.yaml"), availableScps());
   const provider = new aws.Provider("management", { region: spec.region });
   const org = createOrganization(spec, provider);
-  const roles = createManagementTrust(spec, provider);
+  const roles = createManagementTrust(spec, provider, "000000000000");
   const accounts = createAccounts({
     spec,
     ouIds: org.ouIds,
@@ -118,6 +119,17 @@ describe("program against org.example.yaml", () => {
     const mgmtDeploy = ofType("aws:iam/role:Role").find((r) => r.inputs.name === "iac-aws-deploy")!;
     expect(JSON.parse(mgmtDeploy.inputs.assumeRolePolicy).Statement[0].Condition.StringLike).toEqual({
       "token.actions.githubusercontent.com:sub": ["repo:your-github-user/your-iac-aws-copy:ref:refs/heads/main"],
+    });
+  });
+
+  it("lets the plan role read state but only write lock files", () => {
+    const inline = ofType("aws:iam/rolePolicy:RolePolicy").find((p) => p.name === "management-iac-aws-plan-inline")!;
+    const statements = JSON.parse(inline.inputs.policy).Statement;
+    const writes = statements.filter((s: any) => [s.Action].flat().some((a: string) => a.startsWith("s3:Put") || a.startsWith("s3:Delete")));
+    expect(writes).toHaveLength(1);
+    expect(writes[0].Resource).toBe("arn:aws:s3:::iac-aws-state-000000000000/.pulumi/locks/*");
+    expect(statements.find((s: any) => s.Sid === "DecryptSecrets").Condition).toEqual({
+      "ForAnyValue:StringEquals": { "kms:ResourceAliases": "alias/iac-aws-state" },
     });
   });
 

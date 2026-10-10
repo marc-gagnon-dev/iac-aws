@@ -11,31 +11,31 @@ One copy of this repo = one AWS Organization, described by a single `org.yaml`. 
 - SCPs from [`policies/scp/`](policies/scp) attached to the root, OUs, or accounts
 - In each account: GitHub's OIDC provider and one `github-<key>` role per entry in its `github` block, plus `iac-aws-readonly` for previews
 - In the management account: `iac-aws-plan` (this repo's PRs, read-only) and `iac-aws-deploy` (this repo's `main`, admin)
+- Pulumi state in an S3 bucket in the management account, secrets encrypted with KMS. The bootstrap wizard creates both; the stack never manages its own backend
 
 ## Bootstrap
 
-Once per organization. You need Node 24, the Pulumi CLI, and a Pulumi Cloud account (free tier is fine).
+Once per organization. You need Node 24, the Pulumi CLI, the AWS CLI v2, the GitHub CLI (signed in), and git.
 
-1. **Create the copy.** On GitHub, "Use this template" → new private repo. Clone it.
-2. **Describe the org.** `cp org.example.yaml org.yaml`, then edit it. Set `selfRepo` to the new repo. `npm ci && npm test` validates it.
-3. **Create the management account.** Sign up for a new AWS account with your email (each organization needs its own management account, so use a fresh plus-address, e.g. `you+org-acme@gmail.com`). Turn on MFA for root.
-4. **Create a temporary key.** In the root console: Security credentials → Create access key. Export it in your shell:
+1. On GitHub, "Use this template" → new **private** repo. Clone it and `cd` into it.
+2. `cp org.example.yaml org.yaml` and describe your organization. Set `selfRepo` to the new repo.
+3. Run the wizard:
    ```bash
-   export AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=...
+   bash scripts/bootstrap.sh
    ```
-   Prefer not to make a root key? Create an IAM user with `AdministratorAccess` and use its key instead. Everything else is the same.
-5. **Deploy.**
-   ```bash
-   pulumi login
-   pulumi stack init main
-   pulumi up
-   ```
-   New accounts take a few minutes each. The stack outputs `planRoleArn` and `deployRoleArn`.
-6. **Hand over to CI.** In the repo's Settings → Secrets and variables → Actions:
-   - variables `IAC_AWS_PLAN_ROLE_ARN`, `IAC_AWS_DEPLOY_ROLE_ARN` (from the outputs) and `AWS_REGION` (same as `region` in `org.yaml`)
-   - secret `PULUMI_ACCESS_TOKEN`
-   - optional variable `PULUMI_STACK` if the stack is not called `main`
-7. **Delete the temporary key** (or the IAM user). Commit `org.yaml` and push.
+
+The wizard walks through eight stages, and every stage can be re-run safely:
+
+| Stage | What happens |
+|---|---|
+| 1. Check tools and org.yaml | installs dependencies, runs the tests (which validate `org.yaml`) |
+| 2. Create the management account | you sign up for a brand-new AWS account (fresh plus-address) and turn on root MFA |
+| 3. Temporary root access key | you create one; it lives only in the wizard's environment, never on disk |
+| 4. State backend | creates the KMS key `alias/iac-aws-state` and the bucket `iac-aws-state-<account-id>` (versioned, private, TLS only) |
+| 5. Pulumi stack | creates stack `main` in that bucket, with secrets encrypted by the KMS key |
+| 6. First deploy | `pulumi up`: organization, OUs, SCPs, accounts, OIDC roles |
+| 7. Hand over to CI | sets the repo variables, commits `org.yaml` and `Pulumi.main.yaml`, pushes, and waits for the `up` workflow to pass |
+| 8. Delete the temporary key | you delete the root key; the wizard checks it no longer works |
 
 From then on: edit `org.yaml` in a PR, read the preview comment, merge to apply.
 
@@ -51,6 +51,15 @@ From then on: edit `org.yaml` in a PR, read the preview comment, merge to apply.
 OIDC subjects look like `repo:<owner>/<repo>:ref:refs/heads/main`, `repo:<owner>/<repo>:environment:production`, or `repo:<owner>/<repo>:pull_request`. In the workload repo, use `aws-actions/configure-aws-credentials` with `role-to-assume: arn:aws:iam::<account-id>:role/github-<key>`; the stack output `githubRoleArns` lists them.
 
 Accounts are `protect`ed. Removing one from `org.yaml` fails until you unprotect it on purpose (`pulumi state unprotect`). Set `closeOnDeletion: true` on the account first if you want it closed rather than detached.
+
+## Running Pulumi locally after bootstrap
+
+The wizard saves the backend URL to `.env` (gitignored). With short-lived admin credentials for the management account:
+
+```bash
+export $(grep PULUMI_BACKEND_URL .env)
+pulumi preview --stack main
+```
 
 ## Development
 

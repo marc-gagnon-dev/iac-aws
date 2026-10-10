@@ -19,8 +19,10 @@ const management = new aws.Provider("management", {
   defaultTags: { tags: { "managed-by": "iac-aws" } },
 });
 
+const managementAccountId = aws.getCallerIdentityOutput({}, { provider: management }).accountId;
+
 const org = createOrganization(spec, management);
-const roles = createManagementTrust(spec, management);
+const roles = createManagementTrust(spec, management, managementAccountId);
 const accounts = createAccounts({
   spec,
   ouIds: org.ouIds,
@@ -39,7 +41,7 @@ attachScps(
 );
 
 export const organizationId = org.organization.id;
-export const managementAccountId = org.organization.masterAccountId;
+export { managementAccountId };
 export const planRoleArn = roles.planRoleArn;
 export const deployRoleArn = roles.deployRoleArn;
 export const accountIds = Object.fromEntries(Object.entries(accounts).map(([k, a]) => [k, a.account.id]));

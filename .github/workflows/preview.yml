@@ -1,6 +1,6 @@
 name: preview
 
-# Runs only in a bootstrapped copy (the role variable is set after the first local `pulumi up`).
+# Runs only in a bootstrapped copy (scripts/bootstrap.sh sets the variables).
 on:
   pull_request:
 
@@ -20,7 +20,6 @@ jobs:
     env:
       # Member accounts are read through iac-aws-readonly, never OrganizationAccountAccessRole.
       IAC_AWS_MODE: plan
-      PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -36,5 +35,6 @@ jobs:
         with:
           command: preview
           stack-name: ${{ vars.PULUMI_STACK || 'main' }}
+          cloud-url: ${{ vars.PULUMI_BACKEND_URL }}
           comment-on-pr: true
           github-token: ${{ secrets.GITHUB_TOKEN }}

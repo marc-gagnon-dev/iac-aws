@@ -101,6 +101,9 @@ iac-aws/
     scps.ts                  # load policies/scp/*.json, template, size-check, attach
     accounts.ts              # create/adopt accounts, per-account provider, readonly role
     management.ts            # iac-aws-plan / iac-aws-deploy roles for this repo
+    state.ts                 # state bucket / KMS naming, shared with the wizard
+  scripts/
+    bootstrap.sh             # one-time interactive bootstrap wizard
     github-oidc.ts           # GithubOidcTrust component: OIDC provider + roles in one account
   policies/scp/
     deny-leave-org.json
@@ -124,7 +127,7 @@ Adding an SCP to the library is dropping a JSON file into `policies/scp/`. A str
 |---|---|---|
 | Language | TypeScript | Best Pulumi coverage; zod for the spec |
 | Spec location | `org.yaml` at repo root | One org per repo copy, so one obvious file to edit; Pulumi stack config keeps only backend settings and secrets |
-| State backend | Pulumi Cloud by default, S3 optional | Avoids a bootstrap bucket in an account that does not exist yet |
+| State backend | S3 bucket `iac-aws-state-<account-id>` in the management account, secrets via KMS `alias/iac-aws-state` | No third-party service holds the org's state. The bootstrap wizard creates both with the root key; the stack never manages them, so it cannot delete its own state |
 | Cross-account access | `OrganizationAccountAccessRole` | Exists in every vended account; no extra bootstrap per account |
 | Accounts on delete | `protect: true`, `closeOnDeletion` opt-in | Closing an account is slow to undo (90-day window) |
 | OIDC thumbprints | Omitted | AWS validates GitHub's OIDC via its trusted CA store; thumbprints are ignored |
@@ -134,7 +137,9 @@ Adding an SCP to the library is dropping a JSON file into `policies/scp/`. A str
 
 ## Bootstrap (once per repo copy)
 
-Root credentials are used exactly once, to break the chicken-and-egg: nothing that could deploy the org exists until the org is deployed. After the first local `pulumi up`, the repo deploys itself and the root key is deleted. Step-by-step instructions are in the [README](../README.md#bootstrap).
+Root credentials are used exactly once, to break the chicken-and-egg: nothing that could deploy the org exists until the org is deployed. [`scripts/bootstrap.sh`](../scripts/bootstrap.sh) is an interactive wizard that does the whole thing: new management account, temporary root key, S3 state bucket and KMS key, stack creation, first `pulumi up`, GitHub variables, a CI deploy to prove OIDC works, and deleting the key. Every stage is safe to re-run. Details in the [README](../README.md#bootstrap).
+
+The plan role gets just enough of the backend for previews: read the state, write lock files under `.pulumi/locks/`, and decrypt with the state key (matched by alias, so the program never needs the key ID).
 
 ## Gotchas to design around
 

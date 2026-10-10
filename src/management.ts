@@ -3,6 +3,7 @@ import * as pulumi from "@pulumi/pulumi";
 import { READONLY_ROLE } from "./accounts";
 import { GithubOidcTrust } from "./github-oidc";
 import { Spec } from "./spec";
+import { stateReadPolicy } from "./state";
 
 export const PLAN_ROLE = "iac-aws-plan";
 export const DEPLOY_ROLE = "iac-aws-deploy";
@@ -15,8 +16,13 @@ export interface ManagementRoles {
 /**
  * Lets this repo's own workflows run Pulumi against the management account:
  * pull requests preview with read-only access, pushes to main deploy with admin.
+ * Deploy reaches the state bucket and KMS key through AdministratorAccess; plan gets an explicit grant.
  */
-export function createManagementTrust(spec: Spec, provider: aws.Provider): ManagementRoles {
+export function createManagementTrust(
+  spec: Spec,
+  provider: aws.Provider,
+  managementAccountId: pulumi.Input<string>,
+): ManagementRoles {
   const trust = new GithubOidcTrust("management", {
     provider,
     roles: [
@@ -24,10 +30,15 @@ export function createManagementTrust(spec: Spec, provider: aws.Provider): Manag
         name: PLAN_ROLE,
         subjects: [`repo:${spec.selfRepo}:pull_request`],
         policies: ["arn:aws:iam::aws:policy/SecurityAudit"],
-        inlinePolicy: JSON.stringify({
-          Version: "2012-10-17",
-          Statement: [{ Effect: "Allow", Action: "sts:AssumeRole", Resource: `arn:aws:iam::*:role/${READONLY_ROLE}` }],
-        }),
+        inlinePolicy: pulumi.output(managementAccountId).apply((accountId) =>
+          JSON.stringify({
+            Version: "2012-10-17",
+            Statement: [
+              { Sid: "ReadMemberAccounts", Effect: "Allow", Action: "sts:AssumeRole", Resource: `arn:aws:iam::*:role/${READONLY_ROLE}` },
+              ...stateReadPolicy(accountId),
+            ],
+          }),
+        ),
         maxSessionHours: 1,
       },
       {
