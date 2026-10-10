@@ -52,15 +52,6 @@ OIDC subjects look like `repo:<owner>/<repo>:ref:refs/heads/main`, `repo:<owner>
 
 Accounts are `protect`ed. Removing one from `org.yaml` fails until you unprotect it on purpose (`pulumi state unprotect`). Set `closeOnDeletion: true` on the account first if you want it closed rather than detached.
 
-## Running Pulumi locally after bootstrap
-
-The wizard saves the backend URL to `.env` (gitignored). With short-lived admin credentials for the management account:
-
-```bash
-export $(grep PULUMI_BACKEND_URL .env)
-pulumi preview --stack main
-```
-
 ## Development
 
 ```bash

@@ -309,7 +309,6 @@ awsq s3api put-bucket-policy --bucket "$STATE_BUCKET" --policy "$tls_only_policy
 ok "versioning, public access block and TLS-only policy in place"
 PULUMI_BACKEND_URL="s3://${STATE_BUCKET}?region=${REGION}&awssdk=v2"
 export PULUMI_BACKEND_URL
-write_env PULUMI_BACKEND_URL "$PULUMI_BACKEND_URL"
 pause
 
 # ── 5 ─────────────────────────────────────────────────────────────────────
@@ -386,6 +385,6 @@ else
   ok "key $AWS_ACCESS_KEY_ID no longer works"
 fi
 unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
-note "For later local runs: export PULUMI_BACKEND_URL from .env and use short-lived credentials."
+note "From here on, Pulumi runs only in CI: edit org.yaml in a PR, read the preview, merge to apply."
 
 finish

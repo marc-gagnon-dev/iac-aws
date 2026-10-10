@@ -159,6 +159,7 @@ The plan role gets just enough of the backend for previews: read the state, writ
 
 - No per-account security baseline. Accounts get OIDC trust and nothing else.
 - One Organization per repo copy. No multi-org mode.
+- After bootstrap, Pulumi runs only in CI. No local `pulumi up` or `preview`; every change is a PR.
 
 ## Open questions
 
