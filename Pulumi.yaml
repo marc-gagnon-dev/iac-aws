@@ -1,0 +1,7 @@
+name: iac-aws
+description: AWS Organization, OUs, SCPs, member accounts, and GitHub OIDC trust, from org.yaml
+runtime:
+  name: nodejs
+  options:
+    packagemanager: npm
+main: src/index.ts

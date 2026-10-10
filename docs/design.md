@@ -1,6 +1,6 @@
 # iac-aws design
 
-Status: draft, 2026-10-10
+Status: v1 implemented, 2026-10-10
 
 ## Problem
 
@@ -73,61 +73,19 @@ flowchart TB
 Three trust paths, all short-lived credentials:
 
 1. **iac-aws → management account.** GitHub OIDC into `iac-aws-plan` (PRs, read-only) or `iac-aws-deploy` (main branch, admin). Only this repo can touch the management account.
-2. **Management → member accounts.** Pulumi creates one AWS provider per member account that assumes `OrganizationAccountAccessRole` (created by Organizations when it vends the account). The plan role instead assumes a read-only `iac-aws-readonly` role this stack creates in each account, so previews never get admin.
-3. **Workload repo → member account.** Each account gets its own `token.actions.githubusercontent.com` provider and the roles declared in the spec. Trust is scoped by the OIDC `sub` claim.
+2. **Management → member accounts.** Pulumi creates one AWS provider per member account that assumes `OrganizationAccountAccessRole` (created by Organizations when it vends the account). PR previews run with `IAC_AWS_MODE=plan`, which switches those providers to a read-only `iac-aws-readonly` role (AWS `SecurityAudit`) this stack creates in each account, so pull request code never holds admin.
+3. **Workload repo → member account.** Each account with a `github` block gets its own `token.actions.githubusercontent.com` provider and one IAM role per entry, named `github-<key>` (so `deploy:` becomes `github-deploy`). Trust is scoped by the OIDC `sub` claim.
 
 ## The spec
 
-The whole org lives in `org.yaml` at the repo root, validated with zod at program start so a typo fails before any AWS call. The template ships `org.example.yaml`; a new copy renames it to `org.yaml` and edits it. It is the only file a copy should need to change.
-
-```yaml
-# org.yaml
-region: us-east-1                      # home region for the org and its providers
-accountEmail: you+aws-{account}@gmail.com   # {account} is replaced; plus-addressing gives each account a unique root email in one inbox
-selfRepo: acme/iac-aws                 # this copy of the repo; the only one allowed to deploy the org
-allowedRegions: [us-east-1, ca-central-1]
-
-ous:
-  - Security
-  - Workloads/Prod
-  - Workloads/NonProd
-  - Sandbox
-
-scps:
-  deny-leave-org:        [root]
-  deny-root-user:        [root]
-  protect-baseline:      [root]          # CloudTrail, GuardDuty, Config, iac-aws roles
-  region-guard:          [Workloads, Sandbox]
-  deny-expensive:        [Sandbox]
-
-accounts:
-  log-archive:
-    ou: Security
-  app-prod:
-    ou: Workloads/Prod
-    github:
-      deploy:
-        subjects: ["repo:acme/app:environment:prod"]
-        policies: [arn:aws:iam::aws:policy/AdministratorAccess]
-  app-dev:
-    ou: Workloads/NonProd
-    github:
-      deploy:
-        subjects: ["repo:acme/app:ref:refs/heads/main"]
-        policies: [arn:aws:iam::aws:policy/AdministratorAccess]
-      plan:
-        subjects: ["repo:acme/app:pull_request", "repo:acme/worker:pull_request"]
-        policies: [arn:aws:iam::aws:policy/ReadOnlyAccess]
-  legacy-billing:
-    id: "123456789012"                   # adopt an existing account instead of creating it
-    ou: Workloads/Prod
-```
+The whole org lives in `org.yaml` at the repo root, validated with zod at program start so a typo fails before any AWS call. The template ships [`org.example.yaml`](../org.example.yaml), which is the annotated reference for every field; a new copy renames it to `org.yaml` and edits it. It is the only file a copy should need to change.
 
 Rules the schema enforces:
 
 - `subjects` must name a concrete repo. No `repo:org/*` and no bare `*`; those let any repo in the org (or any repo at all) assume the role.
 - Every SCP name must exist in `policies/scp/`. Every OU path in `accounts` and `scps` must be declared in `ous`.
-- At most 5 SCPs per target (AWS hard limit, counting the default `FullAWSAccess`).
+- At most 4 custom SCPs per target (AWS allows 5, and `FullAWSAccess` is always one of them).
+- Every problem is reported at once, not just the first.
 - Account keys are lowercase kebab-case and become the account name, the `{account}` email token, and the Pulumi resource name. Renaming a key is a replace, so the schema treats keys as permanent.
 
 ## Code layout
@@ -135,29 +93,30 @@ Rules the schema enforces:
 ```
 iac-aws/
   Pulumi.yaml
-  org.example.yaml           # the spec above; copies rename it to org.yaml
+  org.example.yaml           # annotated spec; copies rename it to org.yaml
   src/
-    index.ts                 # load spec, wire the pieces in order
+    index.ts                 # load spec, pick plan/deploy mode, wire the pieces
     spec.ts                  # zod schema + cross-reference checks
     organization.ts          # Organization, OU tree from paths
-    scps.ts                  # load policies/scp/*.json, template, attach
-    accounts.ts              # create/adopt accounts, move into OU
-    account-provider.ts      # per-account aws.Provider (deploy vs plan role)
-    github-oidc.ts           # ComponentResource: OIDC provider + roles in one account
-    bootstrap.ts             # mgmt-account OIDC + iac-aws roles, readonly role in members
+    scps.ts                  # load policies/scp/*.json, template, size-check, attach
+    accounts.ts              # create/adopt accounts, per-account provider, readonly role
+    management.ts            # iac-aws-plan / iac-aws-deploy roles for this repo
+    github-oidc.ts           # GithubOidcTrust component: OIDC provider + roles in one account
   policies/scp/
     deny-leave-org.json
-    deny-root-user.json
-    protect-baseline.json
-    region-guard.json        # {{allowedRegions}} templated in; global services exempted
-    deny-expensive.json
-  test/                      # spec validation + policy rendering unit tests
+    deny-root-user.json      # blocks the root user in member accounts
+    protect-iac-access.json  # only OrganizationAccountAccessRole may change iac-aws-*, github-* roles or the OIDC provider
+    region-guard.json        # {{allowedRegions}} templated in; global services exempted (AWS Control Tower list)
+  test/                      # spec rules, SCP rendering, trust policy, whole program under Pulumi mocks
   .github/workflows/
+    ci.yml                   # typecheck + tests on every PR and push
     preview.yml              # PR: OIDC -> iac-aws-plan -> pulumi preview, comment diff
-    up.yml                   # main: OIDC -> iac-aws-deploy -> pulumi up (environment-gated)
+    up.yml                   # main: OIDC -> iac-aws-deploy -> pulumi up
 ```
 
-`GitHubOidcTrust` is the one component with a real interface. Input: an account provider and the account's `github` block. Output: role ARNs. Everything about thumbprints, audiences, condition keys, and session duration stays inside it.
+Adding an SCP to the library is dropping a JSON file into `policies/scp/`. A string value that is exactly `"{{allowedRegions}}"` is replaced with the spec's region list.
+
+`GithubOidcTrust` is the one component with a real interface. Input: an account provider and a list of roles (name, subjects, policies). Output: role ARNs. Everything about thumbprints, audiences, condition keys, and session duration stays inside it.
 
 ## Key decisions
 
@@ -170,30 +129,26 @@ iac-aws/
 | Accounts on delete | `protect: true`, `closeOnDeletion` opt-in | Closing an account is slow to undo (90-day window) |
 | OIDC thumbprints | Omitted | AWS validates GitHub's OIDC via its trusted CA store; thumbprints are ignored |
 | OIDC trust condition | `aud = sts.amazonaws.com` (StringEquals), `sub` (StringLike, no wildcards across repos) | Least privilege per repo/ref/environment |
-| Plan vs deploy | Separate roles everywhere | PR previews run with read-only credentials |
+| Plan vs deploy | Separate roles everywhere, selected by `IAC_AWS_MODE` | PR previews run with read-only credentials |
+| New-account readiness | One-time 60s `time.Sleep` per account | `OrganizationAccountAccessRole` is not assumable the instant `CreateAccount` finishes |
 
 ## Bootstrap (once per repo copy)
 
-Root credentials are used exactly once, to break the chicken-and-egg: nothing that could deploy the org exists until the org is deployed.
-
-1. Sign up for a new AWS account with your email. This becomes the management account. Enable MFA on root.
-2. Create a new repo from this template, rename `org.example.yaml` to `org.yaml`, and fill it in. Child account emails are plus-addresses of the same email.
-3. In the root console, create a root access key and export it locally.
-4. `pulumi stack init main` and `pulumi up`. This creates the Organization, OUs, SCPs, child accounts, each account's OIDC trust, and the `iac-aws-plan`/`iac-aws-deploy` roles in the management account trusting `selfRepo`.
-5. Set the two role ARNs as repo variables, then **delete the root access key**. From here on, every change is a PR: preview on the PR, `pulumi up` on merge.
-
-If a root key feels too sharp, step 3 can instead create a throwaway IAM user with `AdministratorAccess`; the rest of the flow is identical. Either way, no long-lived credential survives step 5.
-
-If an Organization already exists in the account, `pulumi import` it before step 4. Existing accounts can be adopted with `id:` in the spec.
+Root credentials are used exactly once, to break the chicken-and-egg: nothing that could deploy the org exists until the org is deployed. After the first local `pulumi up`, the repo deploys itself and the root key is deleted. Step-by-step instructions are in the [README](../README.md#bootstrap).
 
 ## Gotchas to design around
 
 - **SCPs never apply to the management account.** Keep nothing but org plumbing there.
-- **New accounts are not instantly assumable.** `OrganizationAccountAccessRole` can take a minute after `CreateAccount` finishes; the account provider needs a retry/wait.
-- **Account names, emails, and `roleName` are effectively create-only.** Set `ignoreChanges` on `roleName`; changing email is a separate root-user flow.
+- **New accounts are not instantly assumable.** `OrganizationAccountAccessRole` can take a minute after `CreateAccount` finishes; the program waits once per account (see Key decisions).
+- **Account names, emails, and `roleName` are effectively create-only.** They are in `ignoreChanges`; changing email is a separate root-user flow.
 - **Removing an account from the org** requires the account to have its own payment method and root password. Default behaviour on delete should be "error", not "silently try to detach".
 - **SCP size limit** is 5,120 characters. Region-guard with a long service exemption list gets close; keep it minified when rendered.
 - **Repo renames and transfers.** `sub` uses the repo name, so a deleted-then-recreated repo with the same name inherits trust. Consider GitHub's customizable OIDC subject template with `repository_id`/`repository_owner_id` for high-value roles.
+
+## Known trade-offs
+
+- **PR previews show the member-account providers as changed.** The provider's role switches between `OrganizationAccountAccessRole` and `iac-aws-readonly` depending on mode. It should be cosmetic (an assume-role change does not replace resources); confirm on the first real PR.
+- **A brand-new account in a PR preview shows as "create" with no detail** for the resources inside it, because its ID is not known until it exists.
 
 ## Decided
 

@@ -1,0 +1,39 @@
+name: up
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+# Never run two deploys of the organization at once, and never cancel one halfway.
+concurrency:
+  group: up
+  cancel-in-progress: false
+
+jobs:
+  up:
+    if: vars.IAC_AWS_DEPLOY_ROLE_ARN != ''
+    runs-on: ubuntu-latest
+    env:
+      IAC_AWS_MODE: deploy
+      PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.IAC_AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - uses: pulumi/actions@v7
+        with:
+          command: up
+          stack-name: ${{ vars.PULUMI_STACK || 'main' }}

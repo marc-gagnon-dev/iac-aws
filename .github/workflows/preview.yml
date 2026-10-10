@@ -1,0 +1,40 @@
+name: preview
+
+# Runs only in a bootstrapped copy (the role variable is set after the first local `pulumi up`).
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+
+concurrency:
+  group: preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  preview:
+    if: vars.IAC_AWS_PLAN_ROLE_ARN != ''
+    runs-on: ubuntu-latest
+    env:
+      # Member accounts are read through iac-aws-readonly, never OrganizationAccountAccessRole.
+      IAC_AWS_MODE: plan
+      PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.IAC_AWS_PLAN_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - uses: pulumi/actions@v7
+        with:
+          command: preview
+          stack-name: ${{ vars.PULUMI_STACK || 'main' }}
+          comment-on-pr: true
+          github-token: ${{ secrets.GITHUB_TOKEN }}

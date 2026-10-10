@@ -1,0 +1,61 @@
+# Copy to org.yaml and describe your organization. This is the only file a copy of the repo should change.
+# Validated at startup (src/spec.ts); a mistake fails before anything is sent to AWS.
+
+# Home region for the organization and every account provider.
+region: us-east-1
+
+# Root email for each member account. {account} becomes the account key below.
+# Plus-addressing (you+tag@...) gives every account a unique email in one inbox.
+accountEmail: you+aws-{account}@example.com
+
+# This copy of the repo. Its pull requests get a read-only preview role and pushes to main a deploy role.
+selfRepo: your-github-user/your-iac-aws-copy
+
+# Regions the region-guard SCP allows. Must include region.
+allowedRegions: [us-east-1, us-west-2]
+
+# OU paths. Parents are implied: Workloads/Prod creates Workloads too.
+ous:
+  - Security
+  - Workloads/Prod
+  - Workloads/NonProd
+  - Sandbox
+
+# SCP name (a file in policies/scp/) -> targets: root, an OU path, or an account key.
+# AWS allows 4 of these per target on top of FullAWSAccess.
+# SCPs never apply to the management account.
+scps:
+  deny-leave-org: [root]
+  deny-root-user: [root]
+  protect-iac-access: [root]
+  region-guard: [Workloads, Sandbox]
+
+# Account key -> account. The key is the account name and part of its email; treat it as permanent.
+accounts:
+  log-archive:
+    ou: Security
+
+  app-prod:
+    ou: Workloads/Prod
+    github:
+      # Creates IAM role github-deploy, assumable by GitHub Actions jobs whose OIDC subject matches.
+      deploy:
+        subjects: ["repo:your-github-user/app:environment:production"]
+        policies: [arn:aws:iam::aws:policy/AdministratorAccess]
+
+  app-dev:
+    ou: Workloads/NonProd
+    github:
+      deploy:
+        subjects: ["repo:your-github-user/app:ref:refs/heads/main"]
+        policies: [arn:aws:iam::aws:policy/AdministratorAccess]
+      plan:
+        subjects: ["repo:your-github-user/app:pull_request"]
+        policies: [arn:aws:iam::aws:policy/ReadOnlyAccess]
+
+  # Adopt an account that is already in the organization instead of creating one:
+  # legacy:
+  #   id: "123456789012"
+  #   ou: Sandbox
+  #   name: Legacy Account          # its current name and email, if they differ from the defaults
+  #   email: old-root@example.com
