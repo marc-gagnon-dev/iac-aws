@@ -11,6 +11,7 @@ One copy of this repo = one AWS Organization, described by a single `org.yaml`. 
 - SCPs from [`policies/scp/`](policies/scp) attached to the root, OUs, or accounts
 - In each account: GitHub's OIDC provider and one `github-<key>` role per entry in its `github` block, plus `iac-aws-readonly` for previews
 - In the management account: `iac-aws-plan` (this repo's PRs, read-only) and `iac-aws-deploy` (this repo's `main`, admin)
+- Optional human admins: IAM Identity Center users in an `iac-aws-admins` group with `AdministratorAccess` in every account, management included, signing in at the access portal (stack output `accessPortalUrl`)
 - Pulumi state in an S3 bucket in the management account, secrets encrypted with KMS. The bootstrap wizard creates both; the stack never manages its own backend
 
 ## Bootstrap
@@ -24,7 +25,7 @@ Once per organization. You need Node 24, the Pulumi CLI, the AWS CLI v2, the Git
    bash scripts/bootstrap.sh
    ```
 
-The wizard walks through eight stages, and every stage can be re-run safely:
+The wizard walks through nine stages, and every stage can be re-run safely:
 
 | Stage | What happens |
 |---|---|
@@ -34,8 +35,9 @@ The wizard walks through eight stages, and every stage can be re-run safely:
 | 4. State backend | creates the KMS key `alias/iac-aws-state` and the bucket `iac-aws-state-<account-id>` (versioned, private, TLS only) |
 | 5. Pulumi stack | creates stack `main` in that bucket, with secrets encrypted by the KMS key |
 | 6. First deploy | `pulumi up`: organization, OUs, SCPs, accounts, OIDC roles |
-| 7. Hand over to CI | sets the repo variables, commits `org.yaml` and `Pulumi.main.yaml`, pushes, and waits for the `up` workflow to pass |
-| 8. Delete the temporary admin user | you delete `iac-aws-bootstrap`; the wizard checks its key no longer works |
+| 7. IAM Identity Center | only if `org.yaml` has `identityCenter`: you enable it in the console (it needs the organization from stage 6) and turn on "Send email OTP" |
+| 8. Hand over to CI | sets the repo variables, commits `org.yaml` and `Pulumi.main.yaml`, pushes, and waits for the `up` workflow to pass; that run creates the admins |
+| 9. Delete the temporary admin user | you delete `iac-aws-bootstrap`; the wizard checks its key no longer works |
 
 From then on: edit `org.yaml` in a PR, read the preview comment, merge to apply.
 
@@ -43,7 +45,8 @@ From then on: edit `org.yaml` in a PR, read the preview comment, merge to apply.
 
 | Change | In `org.yaml` |
 |---|---|
-| New account | add an entry under `accounts` |
+| New account | add an entry under `accounts` (admins get access to it automatically) |
+| New admin | add them under `identityCenter.admins`; they sign in at the access portal with their email and get a one-time code |
 | Let a repo deploy to an account | add a role under that account's `github` with the repo's OIDC subject |
 | New OU | add its path under `ous` |
 | New guardrail | add `policies/scp/<name>.json`, then `<name>: [targets]` under `scps` |

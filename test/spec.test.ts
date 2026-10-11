@@ -101,6 +101,23 @@ describe("parseSpec", () => {
     expect(problems(base({ selfRepo: "me@abc/iac-aws" }))).toContain("selfRepo");
   });
 
+  it("reserves root and management as account keys", () => {
+    for (const key of ["root", "management"]) {
+      expect(problems(base({ accounts: { [key]: { ou: "Workloads" } } }))).toContain(`"${key}" is reserved`);
+    }
+  });
+
+  it("validates identityCenter admins", () => {
+    const admin = { email: "me@example.com", givenName: "Me", familyName: "Too" };
+    expect(parseSpec(base({ identityCenter: { admins: [admin] } }), SCPS).identityCenter?.sessionHours).toBe(8);
+    expect(problems(base({ identityCenter: { admins: [] } }))).toContain("identityCenter.admins");
+    expect(problems(base({ identityCenter: { admins: [{ ...admin, email: "nope" }] } }))).toContain("identityCenter.admins");
+    expect(problems(base({ identityCenter: { admins: [admin, { ...admin, email: "ME@example.com" }] } }))).toContain(
+      "duplicate me@example.com",
+    );
+    expect(problems(base({ identityCenter: { admins: [admin], sessionHours: 13 } }))).toContain("sessionHours");
+  });
+
   it("rejects non-kebab account keys", () => {
     expect(problems(base({ accounts: { AppProd: { ou: "Workloads" } } }))).toContain("lowercase kebab-case");
   });

@@ -58,9 +58,22 @@ accounts:
         subjects: ["repo:your-github-user/app:pull_request"]
         policies: [arn:aws:iam::aws:policy/ReadOnlyAccess]
 
-  # Adopt an account that is already in the organization instead of creating one:
+  # Adopt an account that is already in the organization instead of creating one (keys "root" and
+  # "management" are reserved):
   # legacy:
   #   id: "123456789012"
   #   ou: Sandbox
   #   name: Legacy Account          # its current name and email, if they differ from the defaults
   #   email: old-root@example.com
+
+# Optional. Human admins, signing in through IAM Identity Center with AdministratorAccess in every
+# account, management included. Enable Identity Center once in the management account console, in
+# `region`, and turn on "Send email OTP" (the bootstrap wizard walks through both). Each admin then
+# signs in at the access portal (stack output accessPortalUrl) with their email, gets a one-time
+# code by email, and sets a password and MFA.
+identityCenter:
+  admins:
+    - email: you@example.com
+      givenName: Your
+      familyName: Name
+  sessionHours: 8

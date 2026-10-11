@@ -23,13 +23,21 @@ beforeAll(() => {
         }
         if (args.type === "aws:organizations/account:Account") id = args.inputs.import ?? `1${String(created.length).padStart(11, "0")}`;
         if (args.type === "aws:iam/role:Role") state.arn = `arn:aws:iam::000000000000:role/${args.inputs.name}`;
+        if (args.type === "aws:identitystore/group:Group") state.groupId = `${args.name}-group-id`;
+        if (args.type === "aws:identitystore/user:User") state.userId = `${args.name}-user-id`;
+        if (args.type === "aws:ssoadmin/permissionSet:PermissionSet") state.arn = `arn:aws:sso:::permissionSet/${args.name}`;
         if (args.type === "aws:iam/openIdConnectProvider:OpenIdConnectProvider") {
           state.arn = "arn:aws:iam::000000000000:oidc-provider/token.actions.githubusercontent.com";
         }
         return { id, state };
       },
-      call: (args) =>
-        args.token === "aws:index/getCallerIdentity:getCallerIdentity" ? { accountId: "000000000000" } : args.inputs,
+      call: (args) => {
+        if (args.token === "aws:index/getCallerIdentity:getCallerIdentity") return { accountId: "000000000000" };
+        if (args.token === "aws:ssoadmin/getInstances:getInstances") {
+          return { arns: ["arn:aws:sso:::instance/ssoins-test"], identityStoreIds: ["d-1234567890"] };
+        }
+        return args.inputs;
+      },
     },
     "iac-aws",
     "test",
@@ -47,6 +55,7 @@ async function build() {
   const { createOrganization } = await import("../src/organization");
   const { createManagementTrust } = await import("../src/management");
   const { createAccounts, ORG_ACCESS_ROLE } = await import("../src/accounts");
+  const { createAdminAccess } = await import("../src/identity-center");
   const aws = await import("@pulumi/aws");
 
   const spec = loadSpec(path.join(__dirname, "..", "org.example.yaml"), availableScps());
@@ -67,9 +76,12 @@ async function build() {
   );
   await resolve(pulumi.all(Object.values(accounts).map((a) => a.account.id)));
   await resolve(pulumi.all(Object.values(accounts).flatMap((a) => Object.values(a.githubRoleArns))));
+  const memberIds = Object.fromEntries(Object.entries(accounts).map(([k, a]) => [k, a.account.id]));
+  const admins = createAdminAccess(spec, provider, { management: "000000000000", ...memberIds })!;
+  const accessPortalUrl = await resolve(admins.accessPortalUrl);
   // Let pending registrations settle.
   await new Promise((r) => setTimeout(r, 50));
-  return { spec, accounts };
+  return { spec, accounts, accessPortalUrl };
 }
 
 const ofType = (t: string) => created.filter((c) => c.type === t);
@@ -140,5 +152,37 @@ describe("program against org.example.yaml", () => {
       const roleArn = JSON.parse(p.inputs.assumeRoles)[0].roleArn as string;
       expect(roleArn).toMatch(/^arn:aws:iam::\d{12}:role\/OrganizationAccountAccessRole$/);
     }
+  });
+
+  it("gives the admin group AdministratorAccess in every account, management included", () => {
+    const users = ofType("aws:identitystore/user:User");
+    expect(users).toHaveLength(1);
+    expect(users[0].inputs).toMatchObject({
+      identityStoreId: "d-1234567890",
+      userName: "you@example.com",
+      displayName: "Your Name",
+      emails: { value: "you@example.com", primary: true },
+    });
+    expect(ofType("aws:identitystore/groupMembership:GroupMembership")).toHaveLength(1);
+
+    const permissionSet = ofType("aws:ssoadmin/permissionSet:PermissionSet");
+    expect(permissionSet).toHaveLength(1);
+    expect(permissionSet[0].inputs).toMatchObject({ name: "AdministratorAccess", sessionDuration: "PT8H" });
+
+    const assignments = ofType("aws:ssoadmin/accountAssignment:AccountAssignment");
+    expect(assignments.map((a) => a.name).sort()).toEqual([
+      "admin-app-dev",
+      "admin-app-prod",
+      "admin-log-archive",
+      "admin-management",
+    ]);
+    for (const a of assignments) {
+      expect(a.inputs).toMatchObject({ principalType: "GROUP", targetType: "AWS_ACCOUNT", principalId: "admins-group-id" });
+    }
+    expect(assignments.find((a) => a.name === "admin-management")!.inputs.targetId).toBe("000000000000");
+  });
+
+  it("outputs the access portal URL", () => {
+    expect(built.accessPortalUrl).toBe("https://d-1234567890.awsapps.com/start");
   });
 });

@@ -2,6 +2,9 @@ import * as fs from "node:fs";
 import { parse } from "yaml";
 import { z } from "zod";
 
+/** "root" names the organization root in SCP targets; "management" names the management account. */
+export const RESERVED_ACCOUNT_KEYS = ["root", "management"];
+
 /** Number of SCPs a single target can carry, minus the AWS-managed FullAWSAccess that is always attached. */
 export const MAX_CUSTOM_SCPS_PER_TARGET = 4;
 
@@ -31,6 +34,15 @@ const account = z.object({
   github: z.record(z.string(), githubRole).default({}),
 });
 
+const identityCenter = z.object({
+  /** People who get AdministratorAccess in every account. Their email is their sign-in name. */
+  admins: z
+    .array(z.object({ email: z.email(), givenName: z.string().min(1), familyName: z.string().min(1) }))
+    .min(1),
+  /** How long an admin session lasts before signing in again. */
+  sessionHours: z.number().int().min(1).max(12).default(8),
+});
+
 const schema = z.object({
   region: z.string().regex(/^[a-z]{2}(-gov)?-[a-z]+-\d$/),
   accountEmail: z.string().includes("{account}", { message: "must contain {account}" }),
@@ -39,6 +51,7 @@ const schema = z.object({
   ous: z.array(z.string()).default([]),
   scps: z.record(z.string(), z.array(z.string()).min(1)).default({}),
   accounts: z.record(z.string(), account).default({}),
+  identityCenter: identityCenter.optional(),
 });
 
 export type Spec = z.infer<typeof schema>;
@@ -98,6 +111,7 @@ export function parseSpec(raw: unknown, availableScps: string[]): Spec {
   }
   for (const [key, acct] of Object.entries(spec.accounts)) {
     if (!ACCOUNT_KEY.test(key)) problems.push(`accounts.${key}: key must be lowercase kebab-case, 3-50 characters`);
+    if (RESERVED_ACCOUNT_KEYS.includes(key)) problems.push(`accounts.${key}: "${key}" is reserved`);
     for (const role of Object.keys(acct.github)) {
       if (!ROLE_KEY.test(role)) problems.push(`accounts.${key}.github.${role}: role key must be lowercase kebab-case`);
     }
@@ -127,6 +141,10 @@ export function parseSpec(raw: unknown, availableScps: string[]): Spec {
   const emails = Object.keys(spec.accounts).map((k) => accountEmail(spec, k).toLowerCase());
   const dupes = emails.filter((e, i) => emails.indexOf(e) !== i);
   if (dupes.length) problems.push(`accounts: duplicate root emails ${[...new Set(dupes)].join(", ")}`);
+
+  const admins = (spec.identityCenter?.admins ?? []).map((a) => a.email.toLowerCase());
+  const dupeAdmins = admins.filter((e, i) => admins.indexOf(e) !== i);
+  if (dupeAdmins.length) problems.push(`identityCenter.admins: duplicate ${[...new Set(dupeAdmins)].join(", ")}`);
 
   if (problems.length) throw new Error(`org.yaml is invalid:\n${problems.map((p) => `  - ${p}`).join("\n")}`);
   return spec;

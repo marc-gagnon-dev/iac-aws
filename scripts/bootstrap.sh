@@ -194,7 +194,7 @@ finish() {
 #
 # Keep STATE_KEY_ALIAS and the bucket name in sync with src/state.ts.
 
-TOTAL_STAGES=8
+TOTAL_STAGES=9
 
 STACK="main"
 STATE_KEY_ALIAS="alias/iac-aws-state"
@@ -384,13 +384,49 @@ stage "First deploy"
 say "Pulumi shows what it is about to create and asks you to confirm."
 note "Each new account takes a few minutes. If one isn't ready in time, re-run this wizard;"
 note "every stage skips what is already done."
-IAC_AWS_MODE=deploy pulumi up --stack "$STACK"
+identity_center_instance() {
+  awsq sso-admin list-instances --query 'Instances[0].InstanceArn' --output text 2>/dev/null | grep -v '^None$' || true
+}
+WANTS_IDENTITY_CENTER=false
+grep -q '^identityCenter:' org.yaml && WANTS_IDENTITY_CENTER=true
+skip_admins=0
+if $WANTS_IDENTITY_CENTER && [[ -z "$(identity_center_instance)" ]]; then
+  note "Identity Center isn't enabled yet, so this deploy skips the admins. The next stage"
+  note "enables it, and CI creates them in stage 8."
+  skip_admins=1
+fi
+IAC_AWS_MODE=deploy IAC_AWS_SKIP_IDENTITY_CENTER=$skip_admins pulumi up --stack "$STACK"
 PLAN_ROLE_ARN=$(pulumi stack output planRoleArn --stack "$STACK" | tr -d '\r')
 DEPLOY_ROLE_ARN=$(pulumi stack output deployRoleArn --stack "$STACK" | tr -d '\r')
 ok "deployed · plan role $PLAN_ROLE_ARN"
 pause
 
 # ── 7 ─────────────────────────────────────────────────────────────────────
+stage "IAM Identity Center"
+if ! $WANTS_IDENTITY_CENTER; then
+  ok "no identityCenter in org.yaml, skipping"
+elif [[ -n "$(identity_center_instance)" ]]; then
+  ok "already enabled"
+  note "If you haven't yet: Settings → Authentication → Standard authentication → Configure →"
+  note "tick 'Send email OTP' → Save. Without it, admins created by iac-aws can't set a password."
+else
+  say "Admins sign in through IAM Identity Center. It has to be enabled once, by hand, in $REGION."
+  open_url "https://console.aws.amazon.com/singlesignon/home?region=$REGION"
+  step "As root, check the region selector says $REGION, then click 'Enable'."
+  step "Choose the organization instance ('Enable with AWS Organizations') and confirm."
+  step "Then Settings → Authentication tab → Standard authentication → Configure."
+  step "Tick 'Send email OTP' → Save. This lets admins created by iac-aws set their own password."
+  until [[ -n "$(identity_center_instance)" ]]; do
+    pause "Press Enter once Identity Center is enabled."
+    [[ -n "$(identity_center_instance)" ]] && break
+    warn "No Identity Center instance in $REGION yet. Check the region, or wait a few seconds."
+    confirm "Check again?" || exit 1
+  done
+  ok "Identity Center is enabled; CI will create the admins"
+fi
+pause
+
+# ── 8 ─────────────────────────────────────────────────────────────────────
 stage "Hand over to CI"
 say "Setting the repo variables the preview and up workflows read."
 set_var IAC_AWS_PLAN_ROLE_ARN "$PLAN_ROLE_ARN"
@@ -415,6 +451,10 @@ wait_for_new_up_run() {
   done
   if [[ -n "$run_id" ]] && gh run watch "$run_id" --exit-status >/dev/null 2>&1; then
     ok "CI deployed successfully"
+    if $WANTS_IDENTITY_CENTER; then
+      portal=$(pulumi stack output accessPortalUrl --stack "$STACK" 2>/dev/null | tr -d '\r' || true)
+      [[ -n "$portal" ]] && note "Admins: sign in at $portal with your email; a one-time code arrives by email."
+    fi
   else
     warn "The up workflow did not succeed${run_id:+ (run $run_id)}. Check the Actions tab."
     warn "Fix it before deleting ${BOOTSTRAP_USER}; it is the only way in besides CI."
@@ -443,7 +483,7 @@ else
 fi
 pause
 
-# ── 8 ─────────────────────────────────────────────────────────────────────
+# ── 9 ─────────────────────────────────────────────────────────────────────
 stage "Delete the temporary admin user"
 say "CI deploys through OIDC now. The bootstrap user and its key must go."
 open_url "https://console.aws.amazon.com/iam/home#/users"

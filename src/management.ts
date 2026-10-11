@@ -35,6 +35,7 @@ export function createManagementTrust(
             Version: "2012-10-17",
             Statement: [
               { Sid: "ReadMemberAccounts", Effect: "Allow", Action: "sts:AssumeRole", Resource: `arn:aws:iam::*:role/${READONLY_ROLE}` },
+              { Sid: "FindIdentityCenter", Effect: "Allow", Action: "sso:ListInstances", Resource: "*" },
               ...stateReadPolicy(accountId),
             ],
           }),
