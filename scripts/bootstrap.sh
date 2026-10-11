@@ -201,6 +201,17 @@ STATE_KEY_ALIAS="alias/iac-aws-state"
 # AWS CLI on Windows prints CRLF; strip it so captured values compare cleanly.
 awsq() { aws "$@" | tr -d '\r'; }
 ok() { printf '  %s✓%s %s\n' "$GREEN" "$RESET" "$1"; }
+# Strip all whitespace, including the \r a Windows console can append to typed or pasted input.
+clean() { printf '%s' "$1" | tr -d '[:space:]'; }
+
+# Git Bash on Windows: the library's explorer.exe exits non-zero even after opening the
+# page, so open_url warns falsely. `start` opens the default browser and reports honestly.
+if [[ "${OSTYPE:-}" == msys* || "${OSTYPE:-}" == cygwin* ]]; then
+  open_url() {
+    printf '  %s↗ opening%s %s\n' "$GREEN" "$RESET" "$1"
+    cmd.exe //c start "" "$1" >/dev/null 2>&1 || warn "couldn't open a browser, so visit it manually: $1"
+  }
+fi
 
 [[ -f Pulumi.yaml && -d policies/scp ]] || { printf 'Run this from the iac-aws repo root.\n' >&2; exit 1; }
 [[ -f org.yaml ]] || { printf 'No org.yaml. Copy org.example.yaml to org.yaml, fill it in, then re-run.\n' >&2; exit 1; }
@@ -235,16 +246,20 @@ pause
 
 # ── 2 ─────────────────────────────────────────────────────────────────────
 stage "Create the management account"
-say "Each organization needs its own, brand-new AWS account to be its management account."
-note "Use a fresh plus-address, e.g. you+org-<name>@gmail.com. Member accounts use the"
-note "accountEmail pattern from org.yaml."
-open_url "https://portal.aws.amazon.com/billing/signup"
-step "Sign up with that email. The Basic (free) support plan is enough."
-step "Once the account is active, sign in as the root user."
-pause "Press Enter once you're signed in as root."
-open_url "https://console.aws.amazon.com/iam/home#/security_credentials"
-step "Under 'Multi-factor authentication (MFA)', click 'Assign MFA device' and finish the setup."
-pause "Press Enter once MFA is on."
+if confirm "Already created the management account and turned on root MFA?"; then
+  ok "skipping"
+else
+  say "Each organization needs its own, brand-new AWS account to be its management account."
+  note "Use a fresh plus-address, e.g. you+org-<name>@gmail.com. Member accounts use the"
+  note "accountEmail pattern from org.yaml."
+  open_url "https://portal.aws.amazon.com/billing/signup"
+  step "Sign up with that email. The Basic (free) support plan is enough."
+  step "Once the account is active, sign in as the root user."
+  pause "Press Enter once you're signed in as root."
+  open_url "https://console.aws.amazon.com/iam/home#/security_credentials"
+  step "Under 'Multi-factor authentication (MFA)', click 'Assign MFA device' and finish the setup."
+  pause "Press Enter once MFA is on."
+fi
 
 # ── 3 ─────────────────────────────────────────────────────────────────────
 stage "Temporary root access key"
@@ -252,15 +267,28 @@ say "Pulumi needs credentials for the very first deploy. After that, CI uses OID
 open_url "https://console.aws.amazon.com/iam/home#/security_credentials"
 step "Under 'Access keys', click 'Create access key', tick the acknowledgement, then 'Create access key'."
 step "Copy the Access key ID and the Secret access key. Keep the page open until both are pasted."
-ask AWS_ACCESS_KEY_ID "Access key ID:"
-ask_secret AWS_SECRET_ACCESS_KEY "Secret access key:"
-export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
 export AWS_REGION="$REGION" AWS_DEFAULT_REGION="$REGION"
 unset AWS_PROFILE AWS_SESSION_TOKEN
-if ! identity=$(awsq sts get-caller-identity --query '[Account,Arn]' --output text 2>/dev/null); then
-  warn "AWS rejected that key. Re-run and paste it again."
-  exit 1
-fi
+while true; do
+  ask AWS_ACCESS_KEY_ID "Access key ID:"
+  ask_secret AWS_SECRET_ACCESS_KEY "Secret access key:"
+  AWS_ACCESS_KEY_ID=$(clean "$AWS_ACCESS_KEY_ID")
+  AWS_SECRET_ACCESS_KEY=$(clean "$AWS_SECRET_ACCESS_KEY")
+  export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+  if [[ ! "$AWS_ACCESS_KEY_ID" =~ ^AKIA[A-Z0-9]{16}$ ]]; then
+    warn "That doesn't look like an access key ID: expected AKIA plus 16 letters or digits (got ${#AWS_ACCESS_KEY_ID} characters)."
+  elif (( ${#AWS_SECRET_ACCESS_KEY} != 40 )); then
+    warn "The secret access key should be 40 characters; got ${#AWS_SECRET_ACCESS_KEY}."
+  elif result=$(aws sts get-caller-identity --query '[Account,Arn]' --output text 2>&1); then
+    identity=$(tr -d '\r' <<<"$result")
+    break
+  else
+    warn "AWS rejected the key:"
+    note "$(tr -d '\r' <<<"$result")"
+    note "A brand-new key can take a few seconds to start working."
+  fi
+  confirm "Try again?" || exit 1
+done
 ACCOUNT_ID=$(cut -f1 <<<"$identity")
 ok "signed in to account $ACCOUNT_ID as $(cut -f2 <<<"$identity")"
 if awsq organizations describe-organization >/dev/null 2>&1; then
