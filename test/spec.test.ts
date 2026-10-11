@@ -101,6 +101,35 @@ describe("parseSpec", () => {
     expect(problems(base({ selfRepo: "me@abc/iac-aws" }))).toContain("selfRepo");
   });
 
+  it("accepts a Pulumi state backend and per-role access to it", () => {
+    const github = {
+      deploy: { subjects: ["repo:me/app:ref:refs/heads/main"], pulumiState: "write" },
+      plan: { subjects: ["repo:me/app:pull_request"], pulumiState: "read" },
+      other: { subjects: ["repo:me/other:pull_request"] },
+    };
+    const spec = parseSpec(base({ accounts: { "app-prod": { ou: "Workloads/Prod", pulumiState: true, github } } }), SCPS);
+    const acct = spec.accounts["app-prod"];
+    expect(acct.pulumiState).toBe(true);
+    expect(acct.github.deploy.pulumiState).toBe("write");
+    expect(acct.github.plan.pulumiState).toBe("read");
+    expect(acct.github.other.pulumiState).toBeUndefined();
+    expect(parseSpec(base(), SCPS).accounts["app-prod"].pulumiState).toBe(false);
+  });
+
+  it("rejects state access on a role whose account has no state backend", () => {
+    const github = { deploy: { subjects: ["repo:me/app:ref:refs/heads/main"], pulumiState: "write" } };
+    expect(problems(base({ accounts: { "app-prod": { ou: "Workloads/Prod", github } } }))).toContain(
+      "accounts.app-prod.github.deploy.pulumiState: app-prod has no state backend; set pulumiState: true on the account",
+    );
+  });
+
+  it("rejects unknown state access levels", () => {
+    const github = { deploy: { subjects: ["repo:me/app:ref:refs/heads/main"], pulumiState: "admin" } };
+    expect(problems(base({ accounts: { "app-prod": { ou: "Workloads/Prod", pulumiState: true, github } } }))).toContain(
+      "pulumiState",
+    );
+  });
+
   it("reserves root and management as account keys", () => {
     for (const key of ["root", "management"]) {
       expect(problems(base({ accounts: { [key]: { ou: "Workloads" } } }))).toContain(`"${key}" is reserved`);

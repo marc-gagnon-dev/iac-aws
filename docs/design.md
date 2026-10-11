@@ -17,6 +17,7 @@ In v1:
 - SCP library + attachments to root, OUs, or accounts
 - Member accounts (create or adopt), placed in OUs
 - Per-account GitHub OIDC provider and IAM roles trusting specific repos, branches, environments, or PRs
+- Opt-in per-account Pulumi state backend for workload repos (S3 bucket + KMS key), with read or write access granted per GitHub role
 - Monthly cost budgets per account, for the management account, and for the whole organization, all kept in the management account (filtered by linked account) so member-account admins cannot delete them. Email alerts at chosen percentages of actual spend, plus an optional forecast alert
 - Self-hosting: the repo deploys itself from GitHub Actions after a one-time local bootstrap
 - Human admins through IAM Identity Center: users in one group, an `AdministratorAccess` permission set, assigned to every account including management. Enabling Identity Center and its "Send email OTP" setting stay manual (no API for the organization instance); the wizard walks through both after the first deploy, because enabling it needs the organization to exist
@@ -30,9 +31,9 @@ Later (designed for, not built):
 
 Out of scope:
 
-- Per-account security baselines (default EBS encryption, S3 public access block, password policy, default VPC cleanup). Accounts come out of this repo with only the OIDC trust and the read-only role.
+- Per-account security baselines (default EBS encryption, S3 public access block, password policy, default VPC cleanup). Accounts come out of this repo with only the OIDC trust, the read-only role, and the Pulumi state backend if they ask for one.
 - Managing more than one Organization from one repo. Copy the repo instead.
-- Application infrastructure. Workload repos own their own Pulumi stacks and deploy with the role this repo hands them.
+- Application infrastructure. Workload repos own their own Pulumi stacks and deploy with the role this repo hands them, keeping state in the backend this repo provides.
 
 ## Architecture
 
@@ -78,6 +79,17 @@ Three trust paths, all short-lived credentials:
 2. **Management → member accounts.** Pulumi creates one AWS provider per member account that assumes `OrganizationAccountAccessRole` (created by Organizations when it vends the account). PR previews run with `IAC_AWS_MODE=plan`, which switches those providers to a read-only `iac-aws-readonly` role (AWS `SecurityAudit`) this stack creates in each account, so pull request code never holds admin.
 3. **Workload repo → member account.** Each account with a `github` block gets its own `token.actions.githubusercontent.com` provider and one IAM role per entry, named `github-<key>` (so `deploy:` becomes `github-deploy`). Trust is scoped by the OIDC `sub` claim.
 
+## Workload state backends
+
+A workload repo's stacks need a Pulumi backend, and a stack must never own its own (it could delete its own state). An account with `pulumiState: true` gets one from this stack, through the same per-account provider as its GitHub roles (`PulumiStateBackend` in `src/pulumi-state.ts`):
+
+- KMS key `alias/pulumi-state`: rotation on, key policy delegating to IAM in the account. Workload stacks use it as their secrets provider.
+- S3 bucket `pulumi-state-<account-id>`: versioning, SSE-KMS with that key and a bucket key, public access blocked, object ownership enforced, TLS-only bucket policy, noncurrent versions expired after 90 days.
+
+The names are fixed (`src/state.ts`) so a workload repo can find its backend from the account ID and region alone. Every resource is `retainOnDelete`: turning the option off or destroying this stack leaves the workload's state in place. The key and bucket are also `protect`ed, because a replacement would strand the state: a new bucket starts empty, and a new key takes the alias, so the roles' alias-scoped grants stop covering the key that encrypted existing state and secrets. Turning the option off means unprotecting those two first, as with accounts (see the README).
+
+Each `github` role chooses its access with `pulumiState: read | write`, which becomes an inline policy built by `stateAccessPolicy`, the same function that grants the management plan role its access to this stack's own backend. `read` is what a preview needs: list and get, put and delete only under `.pulumi/locks/`, `kms:Decrypt`, and `kms:GenerateDataKey` restricted to calls through S3 (lock files are SSE-KMS encrypted). `write` adds full object writes and `kms:Encrypt`/`GenerateDataKey*`. The key is matched by the `kms:ResourceAliases` condition, as for the org backend. A role asking for access in an account without a backend is a spec error.
+
 ## The spec
 
 The whole org lives in `org.yaml` at the repo root, validated with zod at program start so a typo fails before any AWS call. The template ships [`org.example.yaml`](../org.example.yaml), which is the annotated reference for every field; a new copy renames it to `org.yaml` and edits it. It is the only file a copy should need to change.
@@ -105,7 +117,8 @@ iac-aws/
     management.ts            # iac-aws-plan / iac-aws-deploy roles for this repo
     identity-center.ts       # admin users, group, AdministratorAccess permission set, assignments
     budgets.ts               # monthly cost budgets and alerts, in the management account
-    state.ts                 # state bucket / KMS naming, shared with the wizard
+    state.ts                 # state bucket / KMS naming, shared with the wizard; backend access policies
+    pulumi-state.ts          # PulumiStateBackend component: workload state bucket + KMS key in one account
   scripts/
     bootstrap.sh             # one-time interactive bootstrap wizard
     github-oidc.ts           # GithubOidcTrust component: OIDC provider + roles in one account
@@ -133,6 +146,7 @@ Adding an SCP to the library is dropping a JSON file into `policies/scp/`. A str
 | Spec location | `org.yaml` at repo root | One org per repo copy, so one obvious file to edit; Pulumi stack config keeps only backend settings and secrets |
 | State backend | S3 bucket `iac-aws-state-<account-id>` in the management account, secrets via KMS `alias/iac-aws-state` | No third-party service holds the org's state. The bootstrap wizard creates both; the stack never manages them, so it cannot delete its own state |
 | Cross-account access | `OrganizationAccountAccessRole` | Exists in every vended account; no extra bootstrap per account |
+| Workload state | Opt-in `pulumiState` per account: bucket `pulumi-state-<account-id>`, key `alias/pulumi-state`, retained on delete | Workload stacks must not own their backend either. This stack already owns the account and its roles, and never deletes the backend |
 | Accounts on delete | `protect: true`, `closeOnDeletion` opt-in | Closing an account is slow to undo (90-day window) |
 | OIDC thumbprints | Omitted | AWS validates GitHub's OIDC via its trusted CA store; thumbprints are ignored |
 | OIDC trust condition | `aud = sts.amazonaws.com` (StringEquals), `sub` (StringLike, no wildcards across repos) | Least privilege per repo/ref/environment |
@@ -161,7 +175,7 @@ The plan role gets just enough of the backend for previews: read the state, writ
 
 ## Decided
 
-- No per-account security baseline. Accounts get OIDC trust and nothing else.
+- No per-account security baseline. Accounts get OIDC trust and, if they opt in, a Pulumi state backend; nothing else.
 - One Organization per repo copy. No multi-org mode.
 - After bootstrap, Pulumi runs only in CI. No local `pulumi up` or `preview`; every change is a PR.
 

@@ -3,7 +3,7 @@ import * as pulumi from "@pulumi/pulumi";
 import { READONLY_ROLE } from "./accounts";
 import { GithubOidcTrust } from "./github-oidc";
 import { Spec } from "./spec";
-import { stateReadPolicy } from "./state";
+import { orgStateBackend, stateAccessPolicy } from "./state";
 
 export const PLAN_ROLE = "iac-aws-plan";
 export const DEPLOY_ROLE = "iac-aws-deploy";
@@ -36,7 +36,7 @@ export function createManagementTrust(
             Statement: [
               { Sid: "ReadMemberAccounts", Effect: "Allow", Action: "sts:AssumeRole", Resource: `arn:aws:iam::*:role/${READONLY_ROLE}` },
               { Sid: "FindIdentityCenter", Effect: "Allow", Action: "sso:ListInstances", Resource: "*" },
-              ...stateReadPolicy(accountId),
+              ...stateAccessPolicy(orgStateBackend(accountId), "read"),
             ],
           }),
         ),

@@ -21,6 +21,8 @@ const githubRole = z.object({
   subjects: z.array(z.string().regex(SUBJECT, "must look like repo:<owner>/<repo>:<qualifier> (or repo:<owner>@<id>/<repo>@<id>:<qualifier>) with no wildcard in owner or repo")).min(1),
   policies: z.array(z.string().startsWith("arn:aws:iam::")).default([]),
   maxSessionHours: z.number().int().min(1).max(12).default(1),
+  /** Access to the account's Pulumi state backend: "read" for previews, "write" for deploys. */
+  pulumiState: z.enum(["read", "write"]).optional(),
 });
 
 const account = z.object({
@@ -32,6 +34,8 @@ const account = z.object({
   email: z.email().optional(),
   closeOnDeletion: z.boolean().default(false),
   github: z.record(z.string(), githubRole).default({}),
+  /** Create a Pulumi state backend (bucket and KMS key) in the account for workload repos' stacks. */
+  pulumiState: z.boolean().default(false),
 });
 
 const identityCenter = z.object({
@@ -127,8 +131,11 @@ export function parseSpec(raw: unknown, availableScps: string[]): Spec {
   for (const [key, acct] of Object.entries(spec.accounts)) {
     if (!ACCOUNT_KEY.test(key)) problems.push(`accounts.${key}: key must be lowercase kebab-case, 3-50 characters`);
     if (RESERVED_ACCOUNT_KEYS.includes(key)) problems.push(`accounts.${key}: "${key}" is reserved`);
-    for (const role of Object.keys(acct.github)) {
+    for (const [role, { pulumiState }] of Object.entries(acct.github)) {
       if (!ROLE_KEY.test(role)) problems.push(`accounts.${key}.github.${role}: role key must be lowercase kebab-case`);
+      if (pulumiState && !acct.pulumiState) {
+        problems.push(`accounts.${key}.github.${role}.pulumiState: ${key} has no state backend; set pulumiState: true on the account`);
+      }
     }
     if (!ous.has(acct.ou)) problems.push(`accounts.${key}.ou: "${acct.ou}" is not declared in ous`);
   }

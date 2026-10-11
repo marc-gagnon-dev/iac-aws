@@ -41,22 +41,33 @@ accounts:
 
   app-prod:
     ou: Workloads/Prod
+    # Optional. A Pulumi state backend for workload repos' stacks in this account: bucket
+    # pulumi-state-<account-id> and KMS key alias/pulumi-state. Never deleted by this stack, even if
+    # you turn it off (see the README).
+    pulumiState: true
     github:
       # Creates IAM role github-deploy, assumable by GitHub Actions jobs whose OIDC subject matches.
       # Use the subject form the workload repo's tokens carry (immutable for repos created after 2026-07-15).
       deploy:
         subjects: ["repo:your-github-user/app:environment:production"]
         policies: [arn:aws:iam::aws:policy/AdministratorAccess]
+        # Optional. Access to this account's state backend: write (deploys) or read (previews).
+        # Needs pulumiState: true on the account.
+        pulumiState: write
 
   app-dev:
     ou: Workloads/NonProd
+    pulumiState: true
     github:
       deploy:
         subjects: ["repo:your-github-user/app:ref:refs/heads/main"]
         policies: [arn:aws:iam::aws:policy/AdministratorAccess]
+        pulumiState: write
       plan:
         subjects: ["repo:your-github-user/app:pull_request"]
         policies: [arn:aws:iam::aws:policy/ReadOnlyAccess]
+        # ReadOnlyAccess cannot decrypt secrets or take the stack lock; read adds both.
+        pulumiState: read
 
   # Adopt an account that is already in the organization instead of creating one (keys "root" and
   # "management" are reserved):
