@@ -1,9 +1,9 @@
 name: ci
 
+# On main, up.yml calls this as its first job, so the deploy waits on the same checks.
 on:
   pull_request:
-  push:
-    branches: [main]
+  workflow_call:
 
 permissions:
   contents: read

@@ -15,7 +15,11 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  check:
+    uses: ./.github/workflows/ci.yml
+
   up:
+    needs: check
     if: vars.IAC_AWS_DEPLOY_ROLE_ARN != ''
     runs-on: ubuntu-latest
     env:
@@ -27,7 +31,6 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - run: npm test
       - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.IAC_AWS_DEPLOY_ROLE_ARN }}

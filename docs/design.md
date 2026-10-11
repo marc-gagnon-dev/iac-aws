@@ -116,9 +116,9 @@ iac-aws/
     region-guard.json        # {{allowedRegions}} templated in; global services exempted (AWS Control Tower list)
   test/                      # spec rules, SCP rendering, trust policy, whole program under Pulumi mocks
   .github/workflows/
-    ci.yml                   # typecheck + tests on every PR and push
+    ci.yml                   # PR: typecheck + tests; also the first job of up.yml
     preview.yml              # PR: OIDC -> iac-aws-plan -> pulumi preview, comment diff
-    up.yml                   # main: OIDC -> iac-aws-deploy -> pulumi up
+    up.yml                   # main: ci.yml checks, then OIDC -> iac-aws-deploy -> pulumi up
 ```
 
 Adding an SCP to the library is dropping a JSON file into `policies/scp/`. A string value that is exactly `"{{allowedRegions}}"` is replaced with the spec's region list.
