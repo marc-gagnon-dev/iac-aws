@@ -50,3 +50,10 @@ export const accountIds = memberAccountIds;
 export const githubRoleArns = Object.fromEntries(Object.entries(accounts).map(([k, a]) => [k, a.githubRoleArns]));
 export const ouIds = org.ouIds;
 export const accessPortalUrl = admins?.accessPortalUrl;
+// Per account with pulumiState: true. Workload repos `pulumi login <backendUrl>` and create stacks
+// with `--secrets-provider <secretsProvider>`.
+export const pulumiStateBackends = Object.fromEntries(
+  Object.entries(accounts).flatMap(([k, { pulumiState: s }]) =>
+    s ? [[k, { bucket: s.bucket, keyArn: s.keyArn, backendUrl: s.backendUrl, secretsProvider: s.secretsProvider }]] : [],
+  ),
+);

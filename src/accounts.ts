@@ -2,7 +2,9 @@ import * as aws from "@pulumi/aws";
 import * as pulumi from "@pulumi/pulumi";
 import * as time from "@pulumiverse/time";
 import { GithubOidcTrust } from "./github-oidc";
+import { PulumiStateBackend } from "./pulumi-state";
 import { accountEmail, Spec } from "./spec";
+import { pulumiStateBackend, stateAccessPolicy } from "./state";
 
 /** Role Organizations creates in every account it vends. Deploys reach member accounts through it. */
 export const ORG_ACCESS_ROLE = "OrganizationAccountAccessRole";
@@ -13,6 +15,8 @@ export interface MemberAccount {
   account: aws.organizations.Account;
   provider: aws.Provider;
   githubRoleArns: Record<string, pulumi.Output<string>>;
+  /** Only for accounts with `pulumiState: true`. */
+  pulumiState?: PulumiStateBackend;
 }
 
 export interface AccountsArgs {
@@ -87,11 +91,23 @@ export function createAccounts(args: AccountsArgs): Record<string, MemberAccount
       { provider: accountProvider },
     );
 
-    const roles = Object.entries(acct.github).map(([roleKey, role]) => ({ name: `github-${roleKey}`, ...role }));
+    const pulumiState = acct.pulumiState
+      ? new PulumiStateBackend(key, { provider: accountProvider, accountId: account.id, region: spec.region })
+      : undefined;
+
+    const roles = Object.entries(acct.github).map(([roleKey, { pulumiState: stateAccess, ...role }]) => ({
+      name: `github-${roleKey}`,
+      ...role,
+      inlinePolicy: stateAccess
+        ? account.id.apply((id) =>
+            JSON.stringify({ Version: "2012-10-17", Statement: stateAccessPolicy(pulumiStateBackend(id), stateAccess) }),
+          )
+        : undefined,
+    }));
     const githubRoleArns =
       roles.length > 0 ? new GithubOidcTrust(key, { provider: accountProvider, roles }).roleArns : {};
 
-    result[key] = { account, provider: accountProvider, githubRoleArns };
+    result[key] = { account, provider: accountProvider, githubRoleArns, pulumiState };
   }
 
   return result;

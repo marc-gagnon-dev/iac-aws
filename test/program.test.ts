@@ -6,15 +6,18 @@ interface Created {
   type: string;
   name: string;
   inputs: Record<string, any>;
+  protect?: boolean;
+  retainOnDelete?: boolean;
 }
 
 const created: Created[] = [];
+const options = new Map<string, { protect?: boolean; retainOnDelete?: boolean }>();
 
 beforeAll(() => {
   pulumi.runtime.setMocks(
     {
       newResource(args) {
-        created.push({ type: args.type, name: args.name, inputs: args.inputs });
+        created.push({ type: args.type, name: args.name, inputs: args.inputs, ...options.get(`${args.type} ${args.name}`) });
         const state: Record<string, any> = { ...args.inputs };
         let id = `${args.name}-id`;
         if (args.type === "aws:organizations/organization:Organization") {
@@ -26,6 +29,12 @@ beforeAll(() => {
         if (args.type === "aws:identitystore/group:Group") state.groupId = `${args.name}-group-id`;
         if (args.type === "aws:identitystore/user:User") state.userId = `${args.name}-user-id`;
         if (args.type === "aws:ssoadmin/permissionSet:PermissionSet") state.arn = `arn:aws:sso:::permissionSet/${args.name}`;
+        if (args.type === "aws:s3/bucket:Bucket") state.arn = `arn:aws:s3:::${args.inputs.bucket}`;
+        if (args.type === "aws:kms/key:Key") {
+          id = `${args.name}-key-id`;
+          state.keyId = id;
+          state.arn = `arn:aws:kms:us-east-1:000000000000:key/${id}`;
+        }
         if (args.type === "aws:iam/openIdConnectProvider:OpenIdConnectProvider") {
           state.arn = "arn:aws:iam::000000000000:oidc-provider/token.actions.githubusercontent.com";
         }
@@ -43,6 +52,13 @@ beforeAll(() => {
     "test",
     false,
   );
+  // Mocks never see resource options, so read protect and retainOnDelete off the raw request.
+  const monitor = pulumi.runtime.getMonitor() as any;
+  const register = monitor.registerResource.bind(monitor);
+  monitor.registerResource = (req: any, callback: any) => {
+    options.set(`${req.getType()} ${req.getName()}`, { protect: req.getProtect(), retainOnDelete: req.getRetainondelete() });
+    return register(req, callback);
+  };
 });
 
 async function resolve<T>(output: pulumi.Output<T>): Promise<T> {
@@ -77,6 +93,7 @@ async function build() {
   );
   await resolve(pulumi.all(Object.values(accounts).map((a) => a.account.id)));
   await resolve(pulumi.all(Object.values(accounts).flatMap((a) => Object.values(a.githubRoleArns))));
+  await resolve(pulumi.all(Object.values(accounts).flatMap((a) => (a.pulumiState ? [a.pulumiState.backendUrl] : []))));
   const memberIds = Object.fromEntries(Object.entries(accounts).map(([k, a]) => [k, a.account.id]));
   const admins = createAdminAccess(spec, provider, { management: "000000000000", ...memberIds })!;
   const accessPortalUrl = await resolve(admins.accessPortalUrl);
@@ -84,7 +101,8 @@ async function build() {
   await new Promise((r) => setTimeout(r, 50));
   // Let pending registrations settle.
   await new Promise((r) => setTimeout(r, 50));
-  return { spec, accounts, accessPortalUrl };
+  const accountIds = await resolve(pulumi.all(memberIds));
+  return { spec, accounts, accessPortalUrl, accountIds };
 }
 
 const ofType = (t: string) => created.filter((c) => c.type === t);
@@ -146,6 +164,101 @@ describe("program against org.example.yaml", () => {
     expect(statements.find((s: any) => s.Sid === "DecryptSecrets").Condition).toEqual({
       "ForAnyValue:StringEquals": { "kms:ResourceAliases": "alias/iac-aws-state" },
     });
+  });
+
+  it("creates a Pulumi state backend only in accounts that opt in", () => {
+    const { accountIds } = built;
+    const buckets = ofType("aws:s3/bucket:Bucket");
+    expect(buckets.map((b) => b.inputs.bucket).sort()).toEqual(
+      [`pulumi-state-${accountIds["app-dev"]}`, `pulumi-state-${accountIds["app-prod"]}`].sort(),
+    );
+    const keys = ofType("aws:kms/key:Key");
+    expect(keys.map((k) => k.name).sort()).toEqual(["app-dev-pulumi-state", "app-prod-pulumi-state"]);
+    for (const k of keys) expect(k.inputs.enableKeyRotation).toBe(true);
+    const devKeyPolicy = JSON.parse(keys.find((k) => k.name === "app-dev-pulumi-state")!.inputs.policy);
+    expect(devKeyPolicy.Statement).toEqual([
+      expect.objectContaining({ Principal: { AWS: `arn:aws:iam::${accountIds["app-dev"]}:root` }, Action: "kms:*" }),
+    ]);
+    const aliases = ofType("aws:kms/alias:Alias");
+    expect(aliases.map((a) => a.inputs.name)).toEqual(["alias/pulumi-state", "alias/pulumi-state"]);
+    expect(aliases.find((a) => a.name === "app-dev-pulumi-state")!.inputs.targetKeyId).toBe("app-dev-pulumi-state-key-id");
+  });
+
+  it("locks the state bucket down and encrypts it with the state key", () => {
+    const dev = (t: string) => ofType(t).find((r) => r.name === "app-dev-pulumi-state")!.inputs;
+    expect(dev("aws:s3/bucketPublicAccessBlock:BucketPublicAccessBlock")).toMatchObject({
+      blockPublicAcls: true,
+      blockPublicPolicy: true,
+      ignorePublicAcls: true,
+      restrictPublicBuckets: true,
+    });
+    expect(dev("aws:s3/bucketOwnershipControls:BucketOwnershipControls").rule).toEqual({ objectOwnership: "BucketOwnerEnforced" });
+    expect(dev("aws:s3/bucketVersioning:BucketVersioning").versioningConfiguration).toEqual({ status: "Enabled" });
+    expect(dev("aws:s3/bucketServerSideEncryptionConfiguration:BucketServerSideEncryptionConfiguration").rules).toEqual([
+      {
+        applyServerSideEncryptionByDefault: {
+          sseAlgorithm: "aws:kms",
+          kmsMasterKeyId: "arn:aws:kms:us-east-1:000000000000:key/app-dev-pulumi-state-key-id",
+        },
+        bucketKeyEnabled: true,
+      },
+    ]);
+    const [rule] = dev("aws:s3/bucketLifecycleConfiguration:BucketLifecycleConfiguration").rules;
+    expect(rule).toMatchObject({ status: "Enabled", noncurrentVersionExpiration: { noncurrentDays: 90 } });
+    const [tls] = JSON.parse(dev("aws:s3/bucketPolicy:BucketPolicy").policy).Statement;
+    expect(tls).toMatchObject({ Effect: "Deny", Action: "s3:*", Condition: { Bool: { "aws:SecureTransport": "false" } } });
+  });
+
+  it("never deletes a state backend, and protects its key and bucket", () => {
+    const backend = created.filter((c) => c.name.endsWith("-pulumi-state"));
+    expect(backend).toHaveLength(18); // 9 resources in each of app-dev and app-prod
+    for (const r of backend) expect(r.retainOnDelete, `${r.type} ${r.name}`).toBe(true);
+    const protectedTypes = backend.filter((r) => r.protect).map((r) => r.type);
+    expect([...new Set(protectedTypes)].sort()).toEqual(["aws:kms/key:Key", "aws:s3/bucket:Bucket"]);
+  });
+
+  it("grants each GitHub role the state access it asks for", () => {
+    const { accountIds } = built;
+    const policy = (name: string) =>
+      JSON.parse(ofType("aws:iam/rolePolicy:RolePolicy").find((p) => p.name === name)!.inputs.policy).Statement;
+    const bucket = `arn:aws:s3:::pulumi-state-${accountIds["app-dev"]}`;
+    const alias = { "ForAnyValue:StringEquals": { "kms:ResourceAliases": "alias/pulumi-state" } };
+
+    const plan = policy("app-dev-github-plan-inline");
+    expect(plan.find((s: any) => s.Sid === "ReadState")).toMatchObject({ Action: "s3:GetObject", Resource: `${bucket}/*` });
+    const writes = plan.filter((s: any) => [s.Action].flat().some((a: string) => a.startsWith("s3:Put") || a.startsWith("s3:Delete")));
+    expect(writes).toHaveLength(1);
+    expect(writes[0].Resource).toBe(`${bucket}/.pulumi/locks/*`);
+    expect(plan.find((s: any) => s.Sid === "DecryptSecrets")).toMatchObject({
+      Action: "kms:Decrypt",
+      Resource: `arn:aws:kms:*:${accountIds["app-dev"]}:key/*`,
+      Condition: alias,
+    });
+    // Lock files are SSE-KMS encrypted, so S3 needs a data key on the plan role's behalf.
+    expect(plan.find((s: any) => s.Sid === "EncryptLocks")).toMatchObject({
+      Action: "kms:GenerateDataKey",
+      Condition: { ...alias, StringLike: { "kms:ViaService": "s3.*.amazonaws.com" } },
+    });
+
+    const deploy = policy("app-dev-github-deploy-inline");
+    expect(deploy.find((s: any) => s.Sid === "WriteState")).toEqual({
+      Sid: "WriteState",
+      Effect: "Allow",
+      Action: ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+      Resource: `${bucket}/*`,
+    });
+    expect(deploy.find((s: any) => s.Sid === "UseStateKey")).toMatchObject({
+      Action: ["kms:Encrypt", "kms:Decrypt", "kms:GenerateDataKey*"],
+      Condition: alias,
+    });
+    expect(policy("app-prod-github-deploy-inline")[0].Resource).toBe(`arn:aws:s3:::pulumi-state-${accountIds["app-prod"]}`);
+  });
+
+  it("outputs how to log in to each state backend", async () => {
+    const dev = built.accounts["app-dev"].pulumiState!;
+    expect(await resolve(dev.backendUrl)).toBe(`s3://pulumi-state-${built.accountIds["app-dev"]}?region=us-east-1&awssdk=v2`);
+    expect(dev.secretsProvider).toBe("awskms://alias/pulumi-state?region=us-east-1");
+    expect(built.accounts["log-archive"].pulumiState).toBeUndefined();
   });
 
   it("points each member provider at its own account", () => {
