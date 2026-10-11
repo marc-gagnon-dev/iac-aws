@@ -118,6 +118,18 @@ describe("parseSpec", () => {
     expect(problems(base({ identityCenter: { admins: [admin], sessionHours: 13 } }))).toContain("sessionHours");
   });
 
+  it("validates budgets", () => {
+    const budgets = { emails: ["me@example.com"], monthly: { organization: 100, management: 5, "app-prod": 50 } };
+    expect(parseSpec(base({ budgets }), SCPS).budgets?.alerts).toEqual([50, 80, 100]);
+    expect(problems(base({ budgets: { ...budgets, monthly: { nope: 10 } } }))).toContain("budgets.monthly.nope");
+    expect(problems(base({ budgets: { ...budgets, monthly: { organization: 0 } } }))).toContain("budgets.monthly");
+    expect(problems(base({ budgets: { ...budgets, emails: [] } }))).toContain("budgets.emails");
+    expect(problems(base({ budgets: { ...budgets, alerts: [50, 50] } }))).toContain("duplicate percentages");
+    expect(problems(base({ budgets: { ...budgets, alerts: [10, 20, 30, 40, 50], forecastAlert: 100 } }))).toContain(
+      "6 alerts",
+    );
+  });
+
   it("rejects non-kebab account keys", () => {
     expect(problems(base({ accounts: { AppProd: { ou: "Workloads" } } }))).toContain("lowercase kebab-case");
   });

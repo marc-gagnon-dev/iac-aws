@@ -17,6 +17,7 @@ In v1:
 - SCP library + attachments to root, OUs, or accounts
 - Member accounts (create or adopt), placed in OUs
 - Per-account GitHub OIDC provider and IAM roles trusting specific repos, branches, environments, or PRs
+- Monthly cost budgets per account, for the management account, and for the whole organization, all kept in the management account (filtered by linked account) so member-account admins cannot delete them. Email alerts at chosen percentages of actual spend, plus an optional forecast alert
 - Self-hosting: the repo deploys itself from GitHub Actions after a one-time local bootstrap
 - Human admins through IAM Identity Center: users in one group, an `AdministratorAccess` permission set, assigned to every account including management. Enabling Identity Center and its "Send email OTP" setting stay manual (no API for the organization instance); the wizard walks through both after the first deploy, because enabling it needs the organization to exist
 
@@ -24,7 +25,7 @@ Later (designed for, not built):
 
 - Org CloudTrail + log-archive account, GuardDuty/Security Hub delegated admin
 - More Identity Center permission sets (read-only, billing) and groups
-- Resource Control Policies, tag policies, budgets
+- Resource Control Policies, tag policies
 - Centralized root access management (remove root credentials from member accounts)
 
 Out of scope:
@@ -103,6 +104,7 @@ iac-aws/
     accounts.ts              # create/adopt accounts, per-account provider, readonly role
     management.ts            # iac-aws-plan / iac-aws-deploy roles for this repo
     identity-center.ts       # admin users, group, AdministratorAccess permission set, assignments
+    budgets.ts               # monthly cost budgets and alerts, in the management account
     state.ts                 # state bucket / KMS naming, shared with the wizard
   scripts/
     bootstrap.sh             # one-time interactive bootstrap wizard

@@ -2,6 +2,7 @@ import * as path from "node:path";
 import * as aws from "@pulumi/aws";
 import * as pulumi from "@pulumi/pulumi";
 import { createAccounts, ORG_ACCESS_ROLE, READONLY_ROLE } from "./accounts";
+import { createBudgets } from "./budgets";
 import { createAdminAccess } from "./identity-center";
 import { createManagementTrust } from "./management";
 import { createOrganization } from "./organization";
@@ -37,9 +38,9 @@ attachScps(spec, { rootId: org.rootId, ouIds: org.ouIds, accountIds: memberAccou
 // enabled once the organization exists, which that same deploy creates. CI never sets it.
 const skipAdmins = process.env.IAC_AWS_SKIP_IDENTITY_CENTER === "1";
 if (skipAdmins && spec.identityCenter) pulumi.log.warn("Skipping Identity Center admins (IAC_AWS_SKIP_IDENTITY_CENTER=1)");
-const admins = skipAdmins
-  ? undefined
-  : createAdminAccess(spec, management, { management: managementAccountId, ...memberAccountIds });
+const allAccountIds = { management: managementAccountId, ...memberAccountIds };
+const admins = skipAdmins ? undefined : createAdminAccess(spec, management, allAccountIds);
+createBudgets(spec, management, allAccountIds);
 
 export const organizationId = org.organization.id;
 export { managementAccountId };

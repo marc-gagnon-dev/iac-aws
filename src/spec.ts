@@ -43,6 +43,20 @@ const identityCenter = z.object({
   sessionHours: z.number().int().min(1).max(12).default(8),
 });
 
+/** AWS allows 5 notifications per budget and 10 email subscribers per notification. */
+export const MAX_BUDGET_NOTIFICATIONS = 5;
+
+const budgets = z.object({
+  /** Who gets the alert emails. */
+  emails: z.array(z.email()).min(1).max(10),
+  /** Alert when actual spend passes these percentages of the monthly amount. */
+  alerts: z.array(z.number().positive().max(1000)).min(1).default([50, 80, 100]),
+  /** Also alert when the month is forecast to pass this percentage. */
+  forecastAlert: z.number().positive().max(1000).optional(),
+  /** USD per month, by "organization" (every account together), "management", or account key. */
+  monthly: z.record(z.string(), z.number().positive()),
+});
+
 const schema = z.object({
   region: z.string().regex(/^[a-z]{2}(-gov)?-[a-z]+-\d$/),
   accountEmail: z.string().includes("{account}", { message: "must contain {account}" }),
@@ -52,6 +66,7 @@ const schema = z.object({
   scps: z.record(z.string(), z.array(z.string()).min(1)).default({}),
   accounts: z.record(z.string(), account).default({}),
   identityCenter: identityCenter.optional(),
+  budgets: budgets.optional(),
 });
 
 export type Spec = z.infer<typeof schema>;
@@ -145,6 +160,20 @@ export function parseSpec(raw: unknown, availableScps: string[]): Spec {
   const admins = (spec.identityCenter?.admins ?? []).map((a) => a.email.toLowerCase());
   const dupeAdmins = admins.filter((e, i) => admins.indexOf(e) !== i);
   if (dupeAdmins.length) problems.push(`identityCenter.admins: duplicate ${[...new Set(dupeAdmins)].join(", ")}`);
+
+  if (spec.budgets) {
+    const { alerts, forecastAlert, monthly } = spec.budgets;
+    for (const key of Object.keys(monthly)) {
+      if (key !== "organization" && key !== "management" && !(key in spec.accounts)) {
+        problems.push(`budgets.monthly.${key}: not "organization", "management", or an account key`);
+      }
+    }
+    if (new Set(alerts).size !== alerts.length) problems.push("budgets.alerts: duplicate percentages");
+    const count = alerts.length + (forecastAlert === undefined ? 0 : 1);
+    if (count > MAX_BUDGET_NOTIFICATIONS) {
+      problems.push(`budgets: ${count} alerts (alerts plus forecastAlert); AWS allows ${MAX_BUDGET_NOTIFICATIONS} per budget`);
+    }
+  }
 
   if (problems.length) throw new Error(`org.yaml is invalid:\n${problems.map((p) => `  - ${p}`).join("\n")}`);
   return spec;

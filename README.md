@@ -12,6 +12,7 @@ One copy of this repo = one AWS Organization, described by a single `org.yaml`. 
 - In each account: GitHub's OIDC provider and one `github-<key>` role per entry in its `github` block, plus `iac-aws-readonly` for previews
 - In the management account: `iac-aws-plan` (this repo's PRs, read-only) and `iac-aws-deploy` (this repo's `main`, admin)
 - Optional human admins: IAM Identity Center users in an `iac-aws-admins` group with `AdministratorAccess` in every account, management included, signing in at the access portal (stack output `accessPortalUrl`)
+- Optional monthly cost budgets per account (and for the whole organization), emailing you at the percentages you choose
 - Pulumi state in an S3 bucket in the management account, secrets encrypted with KMS. The bootstrap wizard creates both; the stack never manages its own backend
 
 ## Bootstrap
@@ -46,6 +47,7 @@ From then on: edit `org.yaml` in a PR, read the preview comment, merge to apply.
 | Change | In `org.yaml` |
 |---|---|
 | New account | add an entry under `accounts` (admins get access to it automatically) |
+| Budget for an account | add it under `budgets.monthly` (key `organization` covers every account together) |
 | New admin | add them under `identityCenter.admins`; they sign in at the access portal with their email and get a one-time code |
 | Let a repo deploy to an account | add a role under that account's `github` with the repo's OIDC subject |
 | New OU | add its path under `ous` |

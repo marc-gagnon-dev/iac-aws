@@ -56,6 +56,7 @@ async function build() {
   const { createManagementTrust } = await import("../src/management");
   const { createAccounts, ORG_ACCESS_ROLE } = await import("../src/accounts");
   const { createAdminAccess } = await import("../src/identity-center");
+  const { createBudgets } = await import("../src/budgets");
   const aws = await import("@pulumi/aws");
 
   const spec = loadSpec(path.join(__dirname, "..", "org.example.yaml"), availableScps());
@@ -79,6 +80,8 @@ async function build() {
   const memberIds = Object.fromEntries(Object.entries(accounts).map(([k, a]) => [k, a.account.id]));
   const admins = createAdminAccess(spec, provider, { management: "000000000000", ...memberIds })!;
   const accessPortalUrl = await resolve(admins.accessPortalUrl);
+  createBudgets(spec, provider, { management: "000000000000", ...memberIds });
+  await new Promise((r) => setTimeout(r, 50));
   // Let pending registrations settle.
   await new Promise((r) => setTimeout(r, 50));
   return { spec, accounts, accessPortalUrl };
@@ -184,5 +187,39 @@ describe("program against org.example.yaml", () => {
 
   it("outputs the access portal URL", () => {
     expect(built.accessPortalUrl).toBe("https://d-1234567890.awsapps.com/start");
+  });
+
+  it("creates a monthly budget per key, filtered to its account", () => {
+    const budgets = ofType("aws:budgets/budget:Budget");
+    expect(budgets.map((b) => b.inputs.name).sort()).toEqual([
+      "iac-aws-app-dev",
+      "iac-aws-app-prod",
+      "iac-aws-management",
+      "iac-aws-organization",
+    ]);
+    const prod = budgets.find((b) => b.inputs.name === "iac-aws-app-prod")!.inputs;
+    expect(prod).toMatchObject({ budgetType: "COST", limitAmount: "200", limitUnit: "USD", timeUnit: "MONTHLY" });
+    expect(prod.costFilters).toEqual([{ name: "LinkedAccount", values: [expect.stringMatching(/^[0-9]{12}$/)] }]);
+    const mgmt = budgets.find((b) => b.inputs.name === "iac-aws-management")!.inputs;
+    expect(mgmt.costFilters).toEqual([{ name: "LinkedAccount", values: ["000000000000"] }]);
+    const org = budgets.find((b) => b.inputs.name === "iac-aws-organization")!.inputs;
+    expect(org.costFilters ?? []).toEqual([]);
+  });
+
+  it("alerts at each percentage on actual spend, plus the forecast", () => {
+    const prod = ofType("aws:budgets/budget:Budget").find((b) => b.inputs.name === "iac-aws-app-prod")!.inputs;
+    expect(prod.notifications.map((n: any) => [n.notificationType, n.threshold])).toEqual([
+      ["ACTUAL", 50],
+      ["ACTUAL", 80],
+      ["ACTUAL", 100],
+      ["FORECASTED", 100],
+    ]);
+    for (const n of prod.notifications) {
+      expect(n).toMatchObject({
+        comparisonOperator: "GREATER_THAN",
+        thresholdType: "PERCENTAGE",
+        subscriberEmailAddresses: ["you@example.com"],
+      });
+    }
   });
 });
