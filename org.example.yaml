@@ -9,7 +9,11 @@ region: us-east-1
 accountEmail: you+aws-{account}@example.com
 
 # This copy of the repo. Its pull requests get a read-only preview role and pushes to main a deploy role.
-selfRepo: your-github-user/your-iac-aws-copy
+# Must match the repo part of the subject GitHub puts in its OIDC tokens. Repos created after
+# 2026-07-15 use the immutable form <owner>@<owner-id>/<repo>@<repo-id>; get it with
+#   gh api repos/<owner>/<repo>/actions/oidc/customization/sub --jq .sub_claim_prefix
+# and drop the leading "repo:". The bootstrap wizard checks this for you.
+selfRepo: your-github-user@1234567/your-iac-aws-copy@890123456
 
 # Regions the region-guard SCP allows. Must include region.
 allowedRegions: [us-east-1, us-west-2]
@@ -39,6 +43,7 @@ accounts:
     ou: Workloads/Prod
     github:
       # Creates IAM role github-deploy, assumable by GitHub Actions jobs whose OIDC subject matches.
+      # Use the subject form the workload repo's tokens carry (immutable for repos created after 2026-07-15).
       deploy:
         subjects: ["repo:your-github-user/app:environment:production"]
         policies: [arn:aws:iam::aws:policy/AdministratorAccess]

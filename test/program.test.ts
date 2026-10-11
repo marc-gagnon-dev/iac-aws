@@ -118,7 +118,7 @@ describe("program against org.example.yaml", () => {
     expect(ofType("aws:iam/openIdConnectProvider:OpenIdConnectProvider")).toHaveLength(3); // management, app-prod, app-dev
     const mgmtDeploy = ofType("aws:iam/role:Role").find((r) => r.inputs.name === "iac-aws-deploy")!;
     expect(JSON.parse(mgmtDeploy.inputs.assumeRolePolicy).Statement[0].Condition.StringLike).toEqual({
-      "token.actions.githubusercontent.com:sub": ["repo:your-github-user/your-iac-aws-copy:ref:refs/heads/main"],
+      "token.actions.githubusercontent.com:sub": ["repo:your-github-user@1234567/your-iac-aws-copy@890123456:ref:refs/heads/main"],
     });
   });
 

@@ -148,7 +148,7 @@ The plan role gets just enough of the backend for previews: read the state, writ
 - **Account names, emails, and `roleName` are effectively create-only.** They are in `ignoreChanges`; changing email is a separate root-user flow.
 - **Removing an account from the org** requires the account to have its own payment method and root password. Default behaviour on delete should be "error", not "silently try to detach".
 - **SCP size limit** is 5,120 characters. Region-guard with a long service exemption list gets close; keep it minified when rendered.
-- **Repo renames and transfers.** `sub` uses the repo name, so a deleted-then-recreated repo with the same name inherits trust. Consider GitHub's customizable OIDC subject template with `repository_id`/`repository_owner_id` for high-value roles.
+- **Immutable subjects.** GitHub repos created after 2026-07-15 put owner and repo IDs in the token subject (`repo:owner@123/repo@456:...`), so a deleted-then-recreated repo with the same name cannot inherit trust. `selfRepo` and `subjects` accept that form and are used verbatim; the bootstrap wizard reads the repo's real prefix from GitHub and fixes `selfRepo` if it differs. Older repos keep the name-only form unless they opt in.
 
 ## Known trade-offs
 

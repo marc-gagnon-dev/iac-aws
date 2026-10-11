@@ -48,7 +48,7 @@ From then on: edit `org.yaml` in a PR, read the preview comment, merge to apply.
 | New OU | add its path under `ous` |
 | New guardrail | add `policies/scp/<name>.json`, then `<name>: [targets]` under `scps` |
 
-OIDC subjects look like `repo:<owner>/<repo>:ref:refs/heads/main`, `repo:<owner>/<repo>:environment:production`, or `repo:<owner>/<repo>:pull_request`. In the workload repo, use `aws-actions/configure-aws-credentials` with `role-to-assume: arn:aws:iam::<account-id>:role/github-<key>`; the stack output `githubRoleArns` lists them.
+OIDC subjects look like `repo:<owner>/<repo>:ref:refs/heads/main`, `repo:<owner>/<repo>:environment:production`, or `repo:<owner>/<repo>:pull_request`. Repos created after 2026-07-15 use GitHub's immutable form, `repo:<owner>@<owner-id>/<repo>@<repo-id>:...`; get a repo's prefix with `gh api repos/<owner>/<repo>/actions/oidc/customization/sub --jq .sub_claim_prefix`. The subject must match exactly, or AWS rejects the job. In the workload repo, use `aws-actions/configure-aws-credentials` with `role-to-assume: arn:aws:iam::<account-id>:role/github-<key>`; the stack output `githubRoleArns` lists them.
 
 Accounts are `protect`ed. Removing one from `org.yaml` fails until you unprotect it on purpose (`pulumi state unprotect`). Set `closeOnDeletion: true` on the account first if you want it closed rather than detached.
 

@@ -86,6 +86,21 @@ describe("parseSpec", () => {
     expect(() => parseSpec(base({ accounts }), SCPS)).not.toThrow();
   });
 
+  it("accepts GitHub's immutable repo form in selfRepo and subjects", () => {
+    const accounts = {
+      "app-prod": { ou: "Workloads/Prod", github: { deploy: { subjects: ["repo:me@123/app@456:ref:refs/heads/main"] } } },
+    };
+    expect(() => parseSpec(base({ selfRepo: "me@123/iac-aws@789", accounts }), SCPS)).not.toThrow();
+  });
+
+  it("rejects wildcards in immutable-form owners or repos", () => {
+    for (const subject of ["repo:me@123/*:pull_request", "repo:me@*/app@456:pull_request"]) {
+      const accounts = { "app-prod": { ou: "Workloads/Prod", github: { deploy: { subjects: [subject] } } } };
+      expect(problems(base({ accounts }))).toContain("subjects");
+    }
+    expect(problems(base({ selfRepo: "me@abc/iac-aws" }))).toContain("selfRepo");
+  });
+
   it("rejects non-kebab account keys", () => {
     expect(problems(base({ accounts: { AppProd: { ou: "Workloads" } } }))).toContain("lowercase kebab-case");
   });

@@ -231,6 +231,30 @@ if (( ${#missing[@]} )); then
   warn "missing: ${missing[*]}. Install them and re-run."
   exit 1
 fi
+# selfRepo must equal the repo part of the subject GitHub puts in this repo's OIDC tokens:
+# owner/repo, or owner@<id>/repo@<id> for repos created after 2026-07-15.
+current_repo=$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null | tr -d '\r' || true)
+oidc_repo=""
+if [[ -n "$current_repo" ]]; then
+  oidc_repo=$(gh api "repos/$current_repo/actions/oidc/customization/sub" --jq '.sub_claim_prefix // ""' 2>/dev/null | tr -d '\r' || true)
+  oidc_repo=${oidc_repo#repo:}
+fi
+if [[ -z "$oidc_repo" ]]; then
+  warn "Couldn't read this repo's OIDC subject from GitHub; assuming '${current_repo:-unknown}'."
+  oidc_repo=$current_repo
+fi
+if [[ "$SELF_REPO" != "$oidc_repo" ]]; then
+  warn "selfRepo in org.yaml is '$SELF_REPO', but GitHub's tokens for this repo say '$oidc_repo'."
+  warn "AWS would reject every CI run. They must match exactly."
+  if confirm "Set selfRepo to '$oidc_repo' in org.yaml?"; then
+    tmp=$(mktemp)
+    sed "s|^selfRepo:.*|selfRepo: $oidc_repo|" org.yaml > "$tmp" && mv "$tmp" org.yaml
+    SELF_REPO=$oidc_repo
+    ok "updated selfRepo in org.yaml"
+  else
+    confirm "Continue anyway?" || exit 1
+  fi
+fi
 say "Installing dependencies and validating org.yaml…"
 npm ci --silent --no-audit --no-fund
 if ! npm test --silent >/dev/null 2>&1; then
@@ -238,12 +262,6 @@ if ! npm test --silent >/dev/null 2>&1; then
   exit 1
 fi
 ok "org.yaml is valid · region $REGION · repo $SELF_REPO"
-current_repo=$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null || true)
-if [[ "$current_repo" != "$SELF_REPO" ]]; then
-  warn "selfRepo in org.yaml is '$SELF_REPO' but this checkout is '${current_repo:-unknown}'."
-  warn "GitHub will only trust '$SELF_REPO', and the variables will be set on '${current_repo:-unknown}'."
-  confirm "Continue anyway?" || exit 1
-fi
 pause
 
 # ── 2 ─────────────────────────────────────────────────────────────────────
@@ -381,31 +399,47 @@ set_var AWS_REGION "$REGION"
 set_var PULUMI_BACKEND_URL "$PULUMI_BACKEND_URL"
 [[ "$STACK" == "main" ]] || set_var PULUMI_STACK "$STACK"
 say ""
+latest_up_run() {
+  gh run list --workflow up.yml --limit 1 --json databaseId --jq '.[0].databaseId // ""' 2>/dev/null | tr -d '\r' || true
+}
+# Wait for an up run newer than $1 and require it to pass: stage 8 deletes the only
+# credentials that could fix a broken CI trust.
+wait_for_new_up_run() {
+  local before="$1" run_id=""
+  say "Waiting for the 'up' workflow, to prove CI can deploy without ${BOOTSTRAP_USER}…"
+  for _ in $(seq 1 24); do
+    sleep 5
+    run_id=$(latest_up_run)
+    [[ -n "$run_id" && "$run_id" != "$before" ]] && break
+    run_id=""
+  done
+  if [[ -n "$run_id" ]] && gh run watch "$run_id" --exit-status >/dev/null 2>&1; then
+    ok "CI deployed successfully"
+  else
+    warn "The up workflow did not succeed${run_id:+ (run $run_id)}. Check the Actions tab."
+    warn "Fix it before deleting ${BOOTSTRAP_USER}; it is the only way in besides CI."
+    confirm "Continue to the last stage anyway?" || exit 1
+  fi
+}
+before_run=$(latest_up_run)
+branch=$(git rev-parse --abbrev-ref HEAD)
 say "org.yaml and Pulumi.$STACK.yaml need to be on main for CI to deploy."
 if [[ -n "$(git status --porcelain -- org.yaml "Pulumi.$STACK.yaml")" ]]; then
-  if confirm "Commit them and push to $(git rev-parse --abbrev-ref HEAD)?"; then
+  if confirm "Commit them and push to $branch?"; then
     git add org.yaml "Pulumi.$STACK.yaml"
     git commit -q -m "Bootstrap organization"
     git push -q
     ok "pushed"
-    say "Waiting for the 'up' workflow, to prove CI can deploy without the bootstrap user…"
-    run_id=""
-    for _ in $(seq 1 12); do
-      sleep 5
-      run_id=$(gh run list --workflow up.yml --limit 1 --json databaseId --jq '.[0].databaseId' 2>/dev/null || true)
-      [[ -n "$run_id" ]] && break
-    done
-    if [[ -n "$run_id" ]] && gh run watch "$run_id" --exit-status >/dev/null 2>&1; then
-      ok "CI deployed successfully"
-    else
-      warn "The up workflow did not succeed, or could not be found. Check the Actions tab"
-      warn "before deleting the key; problems are easier to fix with the key still in place."
-    fi
+    wait_for_new_up_run "$before_run"
   else
     SKIPPED+=("commit and push org.yaml and Pulumi.$STACK.yaml")
   fi
 else
   ok "already committed"
+  if confirm "Run the up workflow now to prove CI can deploy?"; then
+    gh workflow run up.yml --ref "$branch" >/dev/null
+    wait_for_new_up_run "$before_run"
+  fi
 fi
 pause
 

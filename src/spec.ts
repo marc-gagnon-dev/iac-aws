@@ -7,13 +7,15 @@ export const MAX_CUSTOM_SCPS_PER_TARGET = 4;
 
 const ACCOUNT_KEY = /^[a-z][a-z0-9-]{1,48}[a-z0-9]$/;
 const OU_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9 _-]{0,127}$/;
-const REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
-// repo:<owner>/<repo>:<qualifier>. Owner and repo are literal; only the qualifier may use wildcards.
-const SUBJECT = /^repo:[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+:[^\s]+$/;
+// <owner>/<repo>, or GitHub's immutable form <owner>@<owner-id>/<repo>@<repo-id>. Repos created
+// after 2026-07-15 put the immutable form in their OIDC subject, so trust must use it verbatim.
+const REPO = /^[A-Za-z0-9_.-]+(@\d+)?\/[A-Za-z0-9_.-]+(@\d+)?$/;
+// repo:<repo>:<qualifier>, <repo> as above. Owner and repo are literal; only the qualifier may use wildcards.
+const SUBJECT = /^repo:[A-Za-z0-9_.-]+(@\d+)?\/[A-Za-z0-9_.-]+(@\d+)?:[^\s]+$/;
 const ROLE_KEY = /^[a-z][a-z0-9-]{0,40}$/;
 
 const githubRole = z.object({
-  subjects: z.array(z.string().regex(SUBJECT, "must look like repo:<owner>/<repo>:<qualifier> with no wildcard in owner or repo")).min(1),
+  subjects: z.array(z.string().regex(SUBJECT, "must look like repo:<owner>/<repo>:<qualifier> (or repo:<owner>@<id>/<repo>@<id>:<qualifier>) with no wildcard in owner or repo")).min(1),
   policies: z.array(z.string().startsWith("arn:aws:iam::")).default([]),
   maxSessionHours: z.number().int().min(1).max(12).default(1),
 });
@@ -32,7 +34,7 @@ const account = z.object({
 const schema = z.object({
   region: z.string().regex(/^[a-z]{2}(-gov)?-[a-z]+-\d$/),
   accountEmail: z.string().includes("{account}", { message: "must contain {account}" }),
-  selfRepo: z.string().regex(REPO, "must be <owner>/<repo>"),
+  selfRepo: z.string().regex(REPO, "must be <owner>/<repo> or <owner>@<id>/<repo>@<id>"),
   allowedRegions: z.array(z.string()).min(1),
   ous: z.array(z.string()).default([]),
   scps: z.record(z.string(), z.array(z.string()).min(1)).default({}),
