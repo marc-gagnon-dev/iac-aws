@@ -30,12 +30,12 @@ The wizard walks through eight stages, and every stage can be re-run safely:
 |---|---|
 | 1. Check tools and org.yaml | installs dependencies, runs the tests (which validate `org.yaml`) |
 | 2. Create the management account | you sign up for a brand-new AWS account (fresh plus-address) and turn on root MFA |
-| 3. Temporary root access key | you create one; it lives only in the wizard's environment, never on disk |
+| 3. Temporary admin user | as root in the console, you create IAM user `iac-aws-bootstrap` with `AdministratorAccess` and an access key; the key lives only in the wizard's environment, never on disk. Not a root key: root can't assume roles, which the deploy needs |
 | 4. State backend | creates the KMS key `alias/iac-aws-state` and the bucket `iac-aws-state-<account-id>` (versioned, private, TLS only) |
 | 5. Pulumi stack | creates stack `main` in that bucket, with secrets encrypted by the KMS key |
 | 6. First deploy | `pulumi up`: organization, OUs, SCPs, accounts, OIDC roles |
 | 7. Hand over to CI | sets the repo variables, commits `org.yaml` and `Pulumi.main.yaml`, pushes, and waits for the `up` workflow to pass |
-| 8. Delete the temporary key | you delete the root key; the wizard checks it no longer works |
+| 8. Delete the temporary admin user | you delete `iac-aws-bootstrap`; the wizard checks its key no longer works |
 
 From then on: edit `org.yaml` in a PR, read the preview comment, merge to apply.
 

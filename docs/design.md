@@ -6,7 +6,7 @@ Status: v1 implemented, 2026-10-10
 
 Every new AWS environment starts the same way: create an Organization, lay out OUs, attach guardrail SCPs, vend member accounts, and let one or more GitHub repos deploy into each account through OIDC (no long-lived keys). This repo does that generically, driven by a declarative spec, using Pulumi.
 
-**One copy of this repo = one AWS Organization.** To stand up a new org you create a new repo from this one (it is a GitHub template repo), edit `org.yaml`, and bootstrap it with the new management account's root credentials. There is a single Pulumi stack per copy. Nothing in the code knows about more than one org.
+**One copy of this repo = one AWS Organization.** To stand up a new org you create a new repo from this one (it is a GitHub template repo), edit `org.yaml`, and bootstrap it from the new management account. There is a single Pulumi stack per copy. Nothing in the code knows about more than one org.
 
 ## Scope
 
@@ -127,7 +127,7 @@ Adding an SCP to the library is dropping a JSON file into `policies/scp/`. A str
 |---|---|---|
 | Language | TypeScript | Best Pulumi coverage; zod for the spec |
 | Spec location | `org.yaml` at repo root | One org per repo copy, so one obvious file to edit; Pulumi stack config keeps only backend settings and secrets |
-| State backend | S3 bucket `iac-aws-state-<account-id>` in the management account, secrets via KMS `alias/iac-aws-state` | No third-party service holds the org's state. The bootstrap wizard creates both with the root key; the stack never manages them, so it cannot delete its own state |
+| State backend | S3 bucket `iac-aws-state-<account-id>` in the management account, secrets via KMS `alias/iac-aws-state` | No third-party service holds the org's state. The bootstrap wizard creates both; the stack never manages them, so it cannot delete its own state |
 | Cross-account access | `OrganizationAccountAccessRole` | Exists in every vended account; no extra bootstrap per account |
 | Accounts on delete | `protect: true`, `closeOnDeletion` opt-in | Closing an account is slow to undo (90-day window) |
 | OIDC thumbprints | Omitted | AWS validates GitHub's OIDC via its trusted CA store; thumbprints are ignored |
@@ -137,7 +137,7 @@ Adding an SCP to the library is dropping a JSON file into `policies/scp/`. A str
 
 ## Bootstrap (once per repo copy)
 
-Root credentials are used exactly once, to break the chicken-and-egg: nothing that could deploy the org exists until the org is deployed. [`scripts/bootstrap.sh`](../scripts/bootstrap.sh) is an interactive wizard that does the whole thing: new management account, temporary root key, S3 state bucket and KMS key, stack creation, first `pulumi up`, GitHub variables, a CI deploy to prove OIDC works, and deleting the key. Every stage is safe to re-run. Details in the [README](../README.md#bootstrap).
+A temporary IAM admin user breaks the chicken-and-egg: nothing that could deploy the org exists until the org is deployed. Root signs in to the console only, to create that user. It cannot do the deploy itself: AWS never lets root assume roles, and the deploy reaches every member account by assuming `OrganizationAccountAccessRole`. [`scripts/bootstrap.sh`](../scripts/bootstrap.sh) is an interactive wizard that does the whole thing: new management account, temporary admin user, S3 state bucket and KMS key, stack creation, first `pulumi up`, GitHub variables, a CI deploy to prove OIDC works, and deleting the user. Every stage is safe to re-run. Details in the [README](../README.md#bootstrap).
 
 The plan role gets just enough of the backend for previews: read the state, write lock files under `.pulumi/locks/`, and decrypt with the state key (matched by alias, so the program never needs the key ID).
 

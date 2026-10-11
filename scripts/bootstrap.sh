@@ -188,8 +188,9 @@ finish() {
 # Bootstraps one copy of iac-aws, from a brand-new AWS account to CI deploying the org.
 # Run from the repo root: bash scripts/bootstrap.sh
 #
-# The temporary root access key lives only in this process's environment. It is never
-# written to disk, and the last stage has you delete it.
+# The temporary admin key (IAM user iac-aws-bootstrap) lives only in this process's environment. It is never
+# written to disk, and the last stage has you delete the user. Root never gets an access key:
+# AWS does not let root assume roles, which every member-account deploy needs.
 #
 # Keep STATE_KEY_ALIAS and the bucket name in sync with src/state.ts.
 
@@ -197,6 +198,7 @@ TOTAL_STAGES=8
 
 STACK="main"
 STATE_KEY_ALIAS="alias/iac-aws-state"
+BOOTSTRAP_USER="iac-aws-bootstrap"
 
 # AWS CLI on Windows prints CRLF; strip it so captured values compare cleanly.
 awsq() { aws "$@" | tr -d '\r'; }
@@ -262,10 +264,15 @@ else
 fi
 
 # ── 3 ─────────────────────────────────────────────────────────────────────
-stage "Temporary root access key"
-say "Pulumi needs credentials for the very first deploy. After that, CI uses OIDC and this key is deleted."
-open_url "https://console.aws.amazon.com/iam/home#/security_credentials"
-step "Under 'Access keys', click 'Create access key', tick the acknowledgement, then 'Create access key'."
+stage "Temporary admin user"
+say "Pulumi needs credentials for the very first deploy. After that, CI uses OIDC and this user is deleted."
+note "Not a root access key: AWS never lets root assume roles, and the deploy reaches every"
+note "member account by assuming OrganizationAccountAccessRole."
+open_url "https://console.aws.amazon.com/iam/home#/users/create"
+step "As root: user name ${BOOTSTRAP_USER}, no console access → Next."
+step "'Attach policies directly' → tick AdministratorAccess → Next → Create user."
+step "Open ${BOOTSTRAP_USER} → 'Security credentials' tab → 'Create access key'."
+step "Use case 'Command Line Interface (CLI)', tick the confirmation → Next → 'Create access key'."
 step "Copy the Access key ID and the Secret access key. Keep the page open until both are pasted."
 export AWS_REGION="$REGION" AWS_DEFAULT_REGION="$REGION"
 unset AWS_PROFILE AWS_SESSION_TOKEN
@@ -281,7 +288,9 @@ while true; do
     warn "The secret access key should be 40 characters; got ${#AWS_SECRET_ACCESS_KEY}."
   elif result=$(aws sts get-caller-identity --query '[Account,Arn]' --output text 2>&1); then
     identity=$(tr -d '\r' <<<"$result")
-    break
+    [[ "$identity" != *:root ]] && break
+    warn "That is a root access key. Root can't assume roles, so the deploy would fail."
+    note "Create the ${BOOTSTRAP_USER} user's key instead, and delete the root key."
   else
     warn "AWS rejected the key:"
     note "$(tr -d '\r' <<<"$result")"
@@ -379,7 +388,7 @@ if [[ -n "$(git status --porcelain -- org.yaml "Pulumi.$STACK.yaml")" ]]; then
     git commit -q -m "Bootstrap organization"
     git push -q
     ok "pushed"
-    say "Waiting for the 'up' workflow, to prove CI can deploy without the root key…"
+    say "Waiting for the 'up' workflow, to prove CI can deploy without the bootstrap user…"
     run_id=""
     for _ in $(seq 1 12); do
       sleep 5
@@ -401,14 +410,15 @@ fi
 pause
 
 # ── 8 ─────────────────────────────────────────────────────────────────────
-stage "Delete the temporary key"
-say "CI deploys through OIDC now. The root access key must go."
-open_url "https://console.aws.amazon.com/iam/home#/security_credentials"
-step "Under 'Access keys', find $AWS_ACCESS_KEY_ID: Actions → Deactivate, then Actions → Delete."
-pause "Press Enter once it's deleted."
+stage "Delete the temporary admin user"
+say "CI deploys through OIDC now. The bootstrap user and its key must go."
+open_url "https://console.aws.amazon.com/iam/home#/users"
+step "As root: tick ${BOOTSTRAP_USER} → Delete → type the user name to confirm → Delete."
+step "If you ever created a root access key, delete it too: account menu → Security credentials."
+pause "Press Enter once the user is deleted."
 if awsq sts get-caller-identity >/dev/null 2>&1; then
-  warn "That key still works. Delete it before you walk away."
-  SKIPPED+=("delete root access key $AWS_ACCESS_KEY_ID")
+  warn "Key $AWS_ACCESS_KEY_ID still works. Delete ${BOOTSTRAP_USER} before you walk away."
+  SKIPPED+=("delete IAM user ${BOOTSTRAP_USER} (key $AWS_ACCESS_KEY_ID)")
 else
   ok "key $AWS_ACCESS_KEY_ID no longer works"
 fi
