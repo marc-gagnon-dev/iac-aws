@@ -27,7 +27,7 @@ export function createAdminAccess(
     if (!values.length) {
       throw new Error(
         `IAM Identity Center is not enabled in ${spec.region} (no ${what}). Enable it once in the management ` +
-          `account console, in ${spec.region}, then re-run. See scripts/bootstrap.sh stage 3.`,
+          `account console, in ${spec.region}, then re-run. See scripts/bootstrap.sh stage 7.`,
       );
     }
     return values[0];
