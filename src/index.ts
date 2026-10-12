@@ -33,7 +33,11 @@ const accounts = createAccounts({
   planRoleArn: roles.planRoleArn,
 });
 const memberAccountIds = Object.fromEntries(Object.entries(accounts).map(([k, a]) => [k, a.account.id]));
-attachScps(spec, { rootId: org.rootId, ouIds: org.ouIds, accountIds: memberAccountIds }, management);
+attachScps(
+  spec,
+  { organization: org.organization, rootId: org.rootId, ouIds: org.ouIds, accountIds: memberAccountIds },
+  management,
+);
 // The wizard's first deploy sets this when Identity Center is not enabled yet: it can only be
 // enabled once the organization exists, which that same deploy creates. CI never sets it.
 const skipAdmins = process.env.IAC_AWS_SKIP_IDENTITY_CENTER === "1";

@@ -45,6 +45,8 @@ export function renderScp(name: string, source: string, vars: Record<string, unk
 }
 
 export interface ScpTargets {
+  /** Policies can only be created once it exists; nothing in their inputs says so. */
+  organization: pulumi.Resource;
   rootId: pulumi.Input<string>;
   ouIds: Record<string, pulumi.Input<string>>;
   accountIds: Record<string, pulumi.Input<string>>;
@@ -58,7 +60,7 @@ export function attachScps(spec: Spec, targets: ScpTargets, provider: aws.Provid
     const policy = new aws.organizations.Policy(
       `scp-${name}`,
       { name, type: "SERVICE_CONTROL_POLICY", content, description: `iac-aws: ${name}` },
-      { provider },
+      { provider, dependsOn: [targets.organization] },
     );
     for (const targetName of targetNames) {
       const target = resolveTarget(spec, targetName);
