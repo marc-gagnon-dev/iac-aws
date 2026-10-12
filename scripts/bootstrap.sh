@@ -381,7 +381,7 @@ pause
 
 # ── 6 ─────────────────────────────────────────────────────────────────────
 stage "First deploy"
-say "Pulumi shows what it is about to create and asks you to confirm."
+say "Pulumi previews what it is about to create, then you confirm."
 note "Each new account takes a few minutes. If one isn't ready in time, re-run this wizard;"
 note "every stage skips what is already done."
 identity_center_instance() {
@@ -395,7 +395,11 @@ if $WANTS_IDENTITY_CENTER && [[ -z "$(identity_center_instance)" ]]; then
   note "enables it, and CI creates them in stage 8."
   skip_admins=1
 fi
-IAC_AWS_MODE=deploy IAC_AWS_SKIP_IDENTITY_CENTER=$skip_admins pulumi up --stack "$STACK"
+# Pulumi only prompts in a terminal it recognises, and Git Bash started from PowerShell is not one,
+# so preview first and let the wizard ask.
+IAC_AWS_MODE=deploy IAC_AWS_SKIP_IDENTITY_CENTER=$skip_admins pulumi preview --stack "$STACK" --non-interactive
+confirm "Deploy these changes?" || exit 1
+IAC_AWS_MODE=deploy IAC_AWS_SKIP_IDENTITY_CENTER=$skip_admins pulumi up --stack "$STACK" --yes --skip-preview --non-interactive
 PLAN_ROLE_ARN=$(pulumi stack output planRoleArn --stack "$STACK" | tr -d '\r')
 DEPLOY_ROLE_ARN=$(pulumi stack output deployRoleArn --stack "$STACK" | tr -d '\r')
 ok "deployed · plan role $PLAN_ROLE_ARN"
