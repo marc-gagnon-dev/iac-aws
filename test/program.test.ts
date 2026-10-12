@@ -8,10 +8,11 @@ interface Created {
   inputs: Record<string, any>;
   protect?: boolean;
   retainOnDelete?: boolean;
+  dependencies?: string[];
 }
 
 const created: Created[] = [];
-const options = new Map<string, { protect?: boolean; retainOnDelete?: boolean }>();
+const options = new Map<string, { protect?: boolean; retainOnDelete?: boolean; dependencies?: string[] }>();
 
 beforeAll(() => {
   pulumi.runtime.setMocks(
@@ -52,11 +53,15 @@ beforeAll(() => {
     "test",
     false,
   );
-  // Mocks never see resource options, so read protect and retainOnDelete off the raw request.
+  // Mocks never see resource options, so read protect, retainOnDelete and dependencies off the raw request.
   const monitor = pulumi.runtime.getMonitor() as any;
   const register = monitor.registerResource.bind(monitor);
   monitor.registerResource = (req: any, callback: any) => {
-    options.set(`${req.getType()} ${req.getName()}`, { protect: req.getProtect(), retainOnDelete: req.getRetainondelete() });
+    options.set(`${req.getType()} ${req.getName()}`, {
+      protect: req.getProtect(),
+      retainOnDelete: req.getRetainondelete(),
+      dependencies: req.getDependenciesList(),
+    });
     return register(req, callback);
   };
 });
@@ -88,7 +93,12 @@ async function build() {
   });
   attachScps(
     spec,
-    { rootId: org.rootId, ouIds: org.ouIds, accountIds: Object.fromEntries(Object.entries(accounts).map(([k, a]) => [k, a.account.id])) },
+    {
+      organization: org.organization,
+      rootId: org.rootId,
+      ouIds: org.ouIds,
+      accountIds: Object.fromEntries(Object.entries(accounts).map(([k, a]) => [k, a.account.id])),
+    },
     provider,
   );
   await resolve(pulumi.all(Object.values(accounts).map((a) => a.account.id)));
@@ -136,6 +146,16 @@ describe("program against org.example.yaml", () => {
     expect(attachments).toHaveLength(5);
     for (const a of attachments) expect(a.inputs.targetId).toBeTruthy();
     expect(attachments.find((a) => a.name === "scp-region-guard--sandbox")!.inputs.targetId).toBe("ou-sandbox-id");
+  });
+
+  it("creates every SCP only once the organization exists", () => {
+    // Otherwise the first deploy creates them in parallel with the organization, and AWS rejects
+    // them with AWSOrganizationsNotInUseException.
+    const policies = ofType("aws:organizations/policy:Policy");
+    expect(policies).toHaveLength(4);
+    for (const p of policies) {
+      expect(p.dependencies, p.name).toContainEqual(expect.stringMatching(/aws:organizations\/organization:Organization::organization$/));
+    }
   });
 
   it("gives every member account a readonly role trusted by the management plan role", () => {
