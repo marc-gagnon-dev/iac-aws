@@ -130,6 +130,19 @@ describe("parseSpec", () => {
     );
   });
 
+  it("accepts service quotas by service and quota code, and none by default", () => {
+    const serviceQuotas = { "lambda/L-B99A9384": 1000 };
+    const spec = parseSpec(base({ accounts: { "app-prod": { ou: "Workloads/Prod", serviceQuotas } } }), SCPS);
+    expect(spec.accounts["app-prod"].serviceQuotas).toEqual(serviceQuotas);
+    expect(parseSpec(base(), SCPS).accounts["app-prod"].serviceQuotas).toEqual({});
+  });
+
+  it("rejects a service quota that isn't <service code>/<quota code>, or isn't a positive number", () => {
+    for (const serviceQuotas of [{ "L-B99A9384": 1000 }, { "lambda/concurrent-executions": 1000 }, { "lambda/L-B99A9384": 0 }]) {
+      expect(problems(base({ accounts: { "app-prod": { ou: "Workloads/Prod", serviceQuotas } } }))).toContain("serviceQuotas");
+    }
+  });
+
   it("reserves root and management as account keys", () => {
     for (const key of ["root", "management"]) {
       expect(problems(base({ accounts: { [key]: { ou: "Workloads" } } }))).toContain(`"${key}" is reserved`);

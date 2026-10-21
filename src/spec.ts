@@ -16,6 +16,8 @@ const REPO = /^[A-Za-z0-9_.-]+(@\d+)?\/[A-Za-z0-9_.-]+(@\d+)?$/;
 // repo:<repo>:<qualifier>, <repo> as above. Owner and repo are literal; only the qualifier may use wildcards.
 const SUBJECT = /^repo:[A-Za-z0-9_.-]+(@\d+)?\/[A-Za-z0-9_.-]+(@\d+)?:[^\s]+$/;
 const ROLE_KEY = /^[a-z][a-z0-9-]{0,40}$/;
+// <service code>/<quota code>, as Service Quotas names them: lambda/L-B99A9384.
+const SERVICE_QUOTA = /^[a-z0-9-]+\/L-[0-9A-F]{8}$/;
 
 const githubRole = z.object({
   subjects: z.array(z.string().regex(SUBJECT, "must look like repo:<owner>/<repo>:<qualifier> (or repo:<owner>@<id>/<repo>@<id>:<qualifier>) with no wildcard in owner or repo")).min(1),
@@ -36,6 +38,14 @@ const account = z.object({
   github: z.record(z.string(), githubRole).default({}),
   /** Create a Pulumi state backend (bucket and KMS key) in the account for workload repos' stacks. */
   pulumiState: z.boolean().default(false),
+  /**
+   * Service Quotas to hold the account's at, in `region`, by "<service code>/<quota code>"
+   * (`aws service-quotas list-service-quotas --service-code <service code>`). A value above the
+   * current one files an increase request.
+   */
+  serviceQuotas: z
+    .record(z.string().regex(SERVICE_QUOTA, "must be <service code>/<quota code>, like lambda/L-B99A9384"), z.number().positive())
+    .default({}),
 });
 
 const identityCenter = z.object({
