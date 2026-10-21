@@ -3,7 +3,7 @@ import * as pulumi from "@pulumi/pulumi";
 import * as time from "@pulumiverse/time";
 import { GithubOidcTrust } from "./github-oidc";
 import { PulumiStateBackend } from "./pulumi-state";
-import { accountEmail, Spec } from "./spec";
+import { accountEmail, slug, Spec } from "./spec";
 import { pulumiStateBackend, stateAccessPolicy } from "./state";
 
 /** Role Organizations creates in every account it vends. Deploys reach member accounts through it. */
@@ -90,6 +90,17 @@ export function createAccounts(args: AccountsArgs): Record<string, MemberAccount
       { role: readonly.name, policyArn: "arn:aws:iam::aws:policy/SecurityAudit" },
       { provider: accountProvider },
     );
+
+    // A value above the current one files an increase request, which AWS approves, usually within
+    // minutes. An increase can't be taken back, so removing one from the spec only forgets it.
+    for (const [quota, value] of Object.entries(acct.serviceQuotas)) {
+      const [serviceCode, quotaCode] = quota.split("/");
+      new aws.servicequotas.ServiceQuota(
+        `${key}-quota-${slug(quota)}`,
+        { serviceCode, quotaCode, value },
+        { provider: accountProvider, retainOnDelete: true },
+      );
+    }
 
     const pulumiState = acct.pulumiState
       ? new PulumiStateBackend(key, { provider: accountProvider, accountId: account.id, region: spec.region })

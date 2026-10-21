@@ -54,6 +54,12 @@ accounts:
         # Optional. Access to this account's state backend: write (deploys) or read (previews).
         # Needs pulumiState: true on the account.
         pulumiState: write
+    # Optional. Service Quotas to raise in `region`, by "<service code>/<quota code>"
+    # (aws service-quotas list-service-quotas --service-code lambda). A value above the current one
+    # files an increase request; AWS can't take one back, so removing it here only forgets it.
+    serviceQuotas:
+      # Lambda concurrent executions: a new account may start at 10, not AWS's usual 1,000.
+      lambda/L-B99A9384: 1000
 
   app-dev:
     ou: Workloads/NonProd

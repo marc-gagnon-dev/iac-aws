@@ -18,6 +18,7 @@ In v1:
 - Member accounts (create or adopt), placed in OUs
 - Per-account GitHub OIDC provider and IAM roles trusting specific repos, branches, environments, or PRs
 - Opt-in per-account Pulumi state backend for workload repos (S3 bucket + KMS key), with read or write access granted per GitHub role
+- Per-account Service Quotas (`serviceQuotas`), held through the account's provider: a value above the current one files an increase request. The resources are `retainOnDelete`, since AWS can't lower an increase; removing one only forgets it
 - Monthly cost budgets per account, for the management account, and for the whole organization, all kept in the management account (filtered by linked account) so member-account admins cannot delete them. Email alerts at chosen percentages of actual spend, plus an optional forecast alert
 - Self-hosting: the repo deploys itself from GitHub Actions after a one-time local bootstrap
 - Human admins through IAM Identity Center: users in one group, an `AdministratorAccess` permission set, assigned to every account including management. Enabling Identity Center and its "Send email OTP" setting stay manual (no API for the organization instance); the wizard walks through both after the first deploy, because enabling it needs the organization to exist

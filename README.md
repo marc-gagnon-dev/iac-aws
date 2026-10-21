@@ -14,6 +14,7 @@ One copy of this repo = one AWS Organization, described by a single `org.yaml`. 
 - Optional human admins: IAM Identity Center users in an `iac-aws-admins` group with `AdministratorAccess` in every account, management included, signing in at the access portal (stack output `accessPortalUrl`)
 - Optional monthly cost budgets per account (and for the whole organization), emailing you at the percentages you choose
 - Optional Pulumi state backend per account for workload repos' stacks (S3 bucket and KMS key), with read or write access for its `github-<key>` roles
+- Optional Service Quotas per account, such as Lambda concurrent executions, which a new account may get at 10
 - Pulumi state in an S3 bucket in the management account, secrets encrypted with KMS. The bootstrap wizard creates both; the stack never manages its own backend
 
 ## Bootstrap
@@ -52,6 +53,7 @@ From then on: edit `org.yaml` in a PR, read the preview comment, merge to apply.
 | New admin | add them under `identityCenter.admins`; they sign in at the access portal with their email and get a one-time code |
 | Let a repo deploy to an account | add a role under that account's `github` with the repo's OIDC subject |
 | Give a repo's stacks somewhere to keep state | `pulumiState: true` on the account, and `pulumiState: write` (deploys) or `read` (previews) on its roles |
+| Raise an account's quota | add `<service code>/<quota code>: <value>` under the account's `serviceQuotas` (`aws service-quotas list-service-quotas --service-code lambda` lists the codes); AWS approves the request, usually within minutes, and can't take it back |
 | New OU | add its path under `ous` |
 | New guardrail | add `policies/scp/<name>.json`, then `<name>: [targets]` under `scps` |
 

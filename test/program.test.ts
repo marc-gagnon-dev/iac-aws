@@ -204,6 +204,14 @@ describe("program against org.example.yaml", () => {
     expect(aliases.find((a) => a.name === "app-dev-pulumi-state")!.inputs.targetKeyId).toBe("app-dev-pulumi-state-key-id");
   });
 
+  it("raises service quotas only where an account asks, and only forgets them when removed", () => {
+    const quotas = ofType("aws:servicequotas/serviceQuota:ServiceQuota");
+    expect(quotas.map((q) => q.name)).toEqual(["app-prod-quota-lambda-l-b99a9384"]);
+    expect(quotas[0].inputs).toMatchObject({ serviceCode: "lambda", quotaCode: "L-B99A9384", value: 1000 });
+    // AWS can't take an increase back; deleting the resource must not pretend to.
+    expect(quotas[0].retainOnDelete).toBe(true);
+  });
+
   it("locks the state bucket down and encrypts it with the state key", () => {
     const dev = (t: string) => ofType(t).find((r) => r.name === "app-dev-pulumi-state")!.inputs;
     expect(dev("aws:s3/bucketPublicAccessBlock:BucketPublicAccessBlock")).toMatchObject({
